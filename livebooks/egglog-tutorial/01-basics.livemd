@@ -1,0 +1,574 @@
+# Equality Saturation
+
+## Intro
+
+These notebooks are Livebook adaptations of the upstream egglog tutorial from https://egraphs-good.github.io/egglog-tutorial/. The egglog examples follow the upstream chapter order closely; the extra Elixir cells are there to make normally silent egglog state visible in Livebook.
+
+This first chapter is about the core equality-saturation loop:
+
+1. Define a small term language.
+2. Insert ground terms into an e-graph.
+3. Add equations as rewrite rules.
+4. Run those rules until the e-graph contains useful equivalent forms.
+5. Extract a representative term from an equivalence class.
+
+Each executable egglog block is sent directly to one live mutable `Egglog.EGraph` session. The setup cell creates that session and defines a small `Tutorial` module only for displaying outputs and snapshots. The tutorial cells mostly have this shape:
+
+<!-- livebook:{"force_markdown":true} -->
+
+```elixir
+egglog = """
+... <egglog code> ...
+"""
+
+{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+Tutorial.print_outputs(result, egglog)
+```
+
+<!-- livebook:{"break_markdown":true} -->
+
+The `egraph` value is the stateful Elixir handle to the native egglog session. If you want to experiment, edit the egglog program between the triple quotes and re-run the cell.
+
+For visual snapshots, install Graphviz and make sure `dot` is available on `PATH`. If `dot` is unavailable, the helper returns Graphviz DOT text instead of an SVG picture.
+
+The helper deliberately keeps egglog syntax visible. The Elixir code is only notebook plumbing; congruence closure, matching, rebuilding, scheduling, and extraction all happen in native egglog.
+
+When using the published package, replace the dependency with `{:egglog_elixir, "~> 0.1"}`.
+
+```elixir
+Mix.install([
+  {:egglog_elixir, path: Path.expand("../..", __DIR__)},
+  {:kino, "~> 0.19"}
+])
+```
+
+```elixir
+defmodule Tutorial do
+  def print_outputs(result, code \\ "") do
+    (result.outputs ++ check_outputs(code))
+    |> Enum.map(& &1.text)
+    |> Enum.reject(&is_nil/1)
+    |> Enum.map(&String.trim_trailing/1)
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.each(&IO.puts/1)
+  end
+
+  def render_snapshot(%{format: :svg, svg: svg}) when is_binary(svg) do
+    kino_html = Module.concat(Kino, HTML)
+
+    if Code.ensure_loaded?(kino_html) do
+      apply(kino_html, :new, [svg])
+    else
+      svg
+    end
+  end
+
+  def render_snapshot(%{text: text}), do: text
+
+  def summarize_egraph(egraph, opts \\ []) do
+    summary =
+      egraph
+      |> json_snapshot(opts)
+      |> Egglog.Snapshot.summary()
+
+    %{
+      e_nodes: summary.nodes,
+      e_classes: summary.classes,
+      by_operator: summary.operators,
+      omitted: summary.omitted
+    }
+  end
+
+  def sample_json_snapshot(egraph, opts \\ []) do
+    snapshot = json_snapshot(egraph, opts)
+    graph = Jason.decode!(snapshot.json)
+
+    %{
+      format: snapshot.format,
+      top_level_keys: Map.keys(graph) |> Enum.sort(),
+      node_count: map_size(graph["nodes"]),
+      class_count: map_size(graph["class_data"]),
+      sample_node: graph["nodes"] |> Enum.take(1)
+    }
+  end
+
+  defp json_snapshot(egraph, opts) do
+    Egglog.EGraph.snapshot!(egraph, Keyword.merge([render: :json], opts))
+  end
+
+  defp check_outputs(code) do
+    code
+    |> String.split("\n")
+    |> Enum.map(&String.trim/1)
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.filter(&String.contains?(&1, "(check "))
+    |> Enum.map(fn line ->
+      text =
+        if String.starts_with?(line, "(fail ") do
+          "expected failure observed: #{line}"
+        else
+          "check succeeded: #{line}"
+        end
+
+      %{type: :check_success, text: text <> "\n"}
+    end)
+  end
+end
+
+{:ok, egraph} = Egglog.EGraph.new()
+```
+
+From here on, the important API call is `Egglog.EGraph.run(egraph, egglog)`. The e-graph is stateful, so every successful run mutates the same native session.
+
+The remaining `Tutorial` functions are display helpers:
+
+`Tutorial.print_outputs(result, egglog)` shows printed egglog output and friendly messages for successful checks.
+`Tutorial.summarize_egraph(egraph)` asks the wrapper for a JSON snapshot and summarizes the current e-graph.
+`Tutorial.sample_json_snapshot(egraph)` shows a small sample of the native JSON snapshot format.
+`Tutorial.render_snapshot(snapshot)` turns an SVG snapshot into Livebook HTML when Graphviz is available.
+
+## Equality Saturation
+
+In the upstream tutorial, this chapter begins by building an optimizer for a subset of linear algebra using egglog. We start with simple integer arithmetic expressions. Our initial DSL supports constants, variables, addition, and multiplication.
+
+This Livebook version stays close to native egglog syntax. We write the object language explicitly:
+
+`2 * (x + 3)` in the mathematical DSL becomes `(Mul (Num 2) (Add (Var "x") (Num 3)))` in egglog.
+
+```egglog
+(datatype Expr
+  (Num i64)
+  (Var String)
+  (Add Expr Expr)
+  (Mul Expr Expr))
+```
+
+<!-- livebook:{"break_markdown":true} -->
+
+This declaration introduces a first-order signature:
+
+* `Num : i64 -> Expr`
+* `Var : String -> Expr`
+* `Add : Expr x Expr -> Expr`
+* `Mul : Expr x Expr -> Expr`
+
+At this point there are no interesting `Expr` terms yet. We have described the grammar, but we have not inserted any arithmetic expressions into the e-graph.
+
+```elixir
+egglog = """
+(datatype Expr
+  (Num i64)
+  (Var String)
+  (Add Expr Expr)
+  (Mul Expr Expr))
+"""
+
+{:ok, _result} = Egglog.EGraph.run(egraph, egglog)
+Tutorial.summarize_egraph(egraph)
+```
+
+Now, let's define some simple expressions.
+
+```egglog
+; expr1 = 2 * (x * 3)
+(let expr1 (Mul (Num 2) (Mul (Var "x") (Num 3))))
+; expr2 = 6 * x
+(let expr2 (Mul (Num 6) (Var "x")))
+```
+
+```elixir
+egglog = """
+(let expr1 (Mul (Num 2) (Mul (Var "x") (Num 3))))
+(let expr2 (Mul (Num 6) (Var "x")))
+"""
+
+{:ok, _result} = Egglog.EGraph.run(egraph, egglog)
+Tutorial.summarize_egraph(egraph)
+```
+
+Now the e-graph under discussion contains two named terms:
+
+* `expr1 = 2 * (x * 3)`
+* `expr2 = 6 * x`
+
+They are not equal yet. We have only inserted them.
+
+The upstream web tutorial shows the e-graph in the browser. In Livebook we ask the wrapper for a comparable snapshot. The snapshot is produced by native egglog's serializer; the helper only asks Graphviz to render it.
+
+```elixir
+Egglog.EGraph.snapshot!(egraph)
+|> Tutorial.render_snapshot()
+```
+
+The same native serializer can export JSON. This is more useful for programmatic inspection than for visualization. The top-level maps expose serialized e-nodes and e-class metadata.
+
+```elixir
+Tutorial.sample_json_snapshot(egraph)
+```
+
+The JSON summary is intentionally small: count e-nodes, count e-classes, and show which constructors currently appear. Think of e-nodes as operation-symbol applications and e-classes as congruence classes.
+
+We can use the `extract` command to print the results of expressions in `egglog`.
+
+```egglog
+(extract "Hello, world!") ; prints "Hello, world!"
+(extract 42) ;; prints 42
+(extract expr1) ;; prints (Mul (Num 2) (Mul (Var "x") (Num 3)))
+(extract expr2) ;; prints (Mul (Num 6) (Var "x"))
+```
+
+```elixir
+egglog = """
+(extract "Hello, world!")
+(extract 42)
+(extract expr1)
+(extract expr2)
+"""
+
+{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+Tutorial.print_outputs(result, egglog)
+Tutorial.summarize_egraph(egraph)
+```
+
+Right now extraction is boring: each e-class mostly contains the term we inserted. Later, after saturation, extraction will choose among many equivalent terms.
+
+We can use the `check` commands to check properties of our e-graph.
+
+Successful checks in egglog are assertions: they normally print nothing. The Livebook helper makes them visible by adding a small `:check_success` output. We also ask for an extraction and a JSON snapshot summary so the cell shows what the assertion is talking about.
+
+```egglog
+(check (= expr1 (Mul x y)))
+(extract expr1)
+```
+
+```elixir
+egglog = """
+(check (= expr1 (Mul x y)))
+(extract expr1)
+"""
+
+{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+Tutorial.print_outputs(result, egglog)
+Tutorial.summarize_egraph(egraph)
+```
+
+This checks if `expr1` is equivalent to some expression `(Mul x y)`, where `x` and `y` are
+ variables that can be mapped to any expression in the e-graph.
+
+There are two different uses of the word “variable” here:
+
+* `(Var "x")` is an object-language variable, represented by the `Var` constructor in our `Expr` datatype. It is part of the expression being optimized.
+* The bare names `x` and `y` in `(check (= expr1 (Mul x y)))` are egglog pattern variables. They range over e-classes while egglog tries to match the pattern.
+
+This distinction is easy to miss because both are printed as variables, but they live at different levels: object-language terms versus egglog patterns.
+
+Checks can fail. For example the following check fails because `expr1` is not equivalent to
+ `(Add x y)` for any `x` and `y` in the e-graph.
+
+```egglog
+(fail (check (= expr1 (Add x y))))
+```
+
+```elixir
+egglog = """
+(fail (check (= expr1 (Add x y))))
+"""
+
+{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+Tutorial.print_outputs(result, egglog)
+```
+
+`fail` is egglog's way to turn an expected failed check into a successful command. In a tutorial or test, this is usually better than letting a failed check abort the whole cell.
+
+Let us define some rewrite rules over our small DSL.
+
+```egglog
+(rewrite (Add x y) (Add y x))
+```
+
+```elixir
+egglog = """
+(rewrite (Add x y) (Add y x))
+"""
+
+{:ok, _result} = Egglog.EGraph.run(egraph, egglog)
+Tutorial.summarize_egraph(egraph)
+```
+
+This rule asserts that addition is commutative. Operationally: whenever the e-graph contains a term matching `(Add x y)`, egglog may add `(Add y x)` and union the two e-classes.
+
+Similarly, we can define the associativity rule for addition.
+
+```egglog
+(rewrite (Add x (Add y z)) (Add (Add x y) z))
+```
+
+```elixir
+egglog = """
+(rewrite (Add x (Add y z)) (Add (Add x y) z))
+"""
+
+{:ok, _result} = Egglog.EGraph.run(egraph, egglog)
+Tutorial.summarize_egraph(egraph)
+```
+
+This rule says that a right-nested addition may be associated to the left. Notice that we are giving egglog equations, not an evaluator. A rewrite adds equality information; it does not destructively replace the old term.
+
+There are two subtleties to rules in egglog.
+
+1. Defining a rule is different from running it. The addition commutativity rule is now registered, but it has not produced new equivalences yet. We can make that visible with a small probe term:
+
+```egglog
+(let add_probe (Add (Var "x") (Num 3)))
+(fail (check (= add_probe (Add (Num 3) (Var "x")))))
+```
+
+```elixir
+egglog = """
+(let add_probe (Add (Var "x") (Num 3)))
+(fail (check (= add_probe (Add (Num 3) (Var "x")))))
+"""
+
+{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+Tutorial.print_outputs(result, egglog)
+Tutorial.summarize_egraph(egraph)
+```
+
+1. Rules are not instantiated for every possible ground term in the free algebra. They are instantiated against terms currently represented in the e-graph. To show this cleanly, we run only the addition rules and then check a term that was never inserted as a named expression.
+
+```egglog
+(run 1)
+(check (= add_probe (Add (Num 3) (Var "x"))))
+(fail (check (= (Add (Num -2) (Num 2)) (Add (Num 2) (Num -2)))))
+```
+
+```elixir
+egglog = """
+(run 1)
+(check (= add_probe (Add (Num 3) (Var "x"))))
+(fail (check (= (Add (Num -2) (Num 2)) (Add (Num 2) (Num -2)))))
+"""
+
+{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+Tutorial.print_outputs(result, egglog)
+Tutorial.summarize_egraph(egraph)
+```
+
+After the one-step run, `add_probe` is equivalent to its swapped form because `add_probe` was present and matched the rule. The unrelated `-2 + 2` and `2 + -2` terms are not automatically equated merely because the rule exists: equality saturation is saturation of the current e-graph, not enumeration of every ground term over the signature.
+
+Let's also define commutativity and associativity for multiplication.
+
+```egglog
+(rewrite (Mul x y) (Mul y x))
+(rewrite (Mul x (Mul y z)) (Mul (Mul x y) z))
+```
+
+```elixir
+egglog = """
+(rewrite (Mul x y) (Mul y x))
+(rewrite (Mul x (Mul y z)) (Mul (Mul x y) z))
+"""
+
+{:ok, _result} = Egglog.EGraph.run(egraph, egglog)
+Tutorial.summarize_egraph(egraph)
+```
+
+`egglog` also defines a set of built-in functions over the primitive types, such as `+` and `*`.
+
+```egglog
+(extract (+ 1 2))
+```
+
+```elixir
+egglog = """
+(extract (+ 1 2))
+"""
+
+{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+Tutorial.print_outputs(result, egglog)
+```
+
+`egglog` supports operator overloading, so the same operator can be used with different types.
+
+```egglog
+(extract (+ "1" "2"))
+(extract (+ 1.0 2.0))
+```
+
+```elixir
+egglog = """
+(extract (+ "1" "2"))
+(extract (+ 1.0 2.0))
+"""
+
+{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+Tutorial.print_outputs(result, egglog)
+Tutorial.summarize_egraph(egraph)
+```
+
+With primitives, we can define rewrite rules that talk about the semantics of operators. The following rules show constant folding over addition and multiplication.
+
+```egglog
+(rewrite (Add (Num a) (Num b))
+         (Num (+ a b)))
+(rewrite (Mul (Num a) (Num b))
+         (Num (* a b)))
+```
+
+```elixir
+egglog = """
+(rewrite (Add (Num a) (Num b))
+         (Num (+ a b)))
+(rewrite (Mul (Num a) (Num b))
+         (Num (* a b)))
+"""
+
+{:ok, _result} = Egglog.EGraph.run(egraph, egglog)
+Tutorial.summarize_egraph(egraph)
+```
+
+The addition rules have already acted on `add_probe`, but the multiplication and constant-folding rules have not yet optimized `expr1` or connected it to `expr2`. To run the rules we have defined so far, we can use the `run` command.
+
+```egglog
+(run 10)
+(extract expr1)
+(extract expr2)
+```
+
+```elixir
+egglog = """
+(run 10)
+(extract expr1)
+(extract expr2)
+"""
+
+{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+Tutorial.print_outputs(result, egglog)
+Tutorial.summarize_egraph(egraph)
+```
+
+At this point the graph contains the original expressions and the alternatives created by associativity, commutativity, and constant folding. In particular, egglog can discover the path
+
+`2 * (x * 3) = (2 * 3) * x = 6 * x`.
+
+This snapshot shows equality saturation as growth of an equivalence structure, not as a single destructive rewrite path.
+
+```elixir
+Egglog.EGraph.snapshot!(egraph)
+|> Tutorial.render_snapshot()
+```
+
+This tells `egglog` to run our rules for 10 iterations. More precisely, egglog runs the following pseudo code:
+
+```
+ G = currentEgraph()
+ for i in 1..10:
+   for each rule r:
+     ms = r.find_matches(G)
+     for m in ms:
+       G = G.apply_rule(r, m)
+     G = rebuild(G)
+```
+
+In other words, `egglog` computes all the matches for one iteration before making any
+ updates to the e-graph. This is in contrast to an evaluation model where rules are immediately
+ applied and the matches are obtained on demand over a changing e-graph.
+
+Thus, after running the rules, you should see the e-graph has grown
+ a little bit, and that `(Mul (Num 2) (Mul (Var "x") (Num 3)))` and `(Mul (Num 6) (Var "x"))` are in the same E-class. In fact, we can check that
+
+```egglog
+(check (= expr1 expr2))
+(extract expr1)
+(extract expr2)
+```
+
+```elixir
+egglog = """
+(check (= expr1 expr2))
+(extract expr1)
+(extract expr2)
+"""
+
+{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+Tutorial.print_outputs(result, egglog)
+Tutorial.summarize_egraph(egraph)
+```
+
+The check is the important mathematical assertion: the two named terms now lie in the same congruence class generated by the rewrite equations and the currently represented terms.
+
+Now that `expr1` and `expr2` have been checked equal, the snapshot should show their representatives living in the same e-class.
+
+```elixir
+Egglog.EGraph.snapshot!(egraph)
+|> Tutorial.render_snapshot()
+```
+
+**Exercises**
+
+**Distributivity.** Define the distributivity rule for multiplication over addition. When you're done, the following code should pass.
+
+```
+; expr3 = 2 * (x + 3)
+(let expr3 (Mul (Num 2) (Add (Var "x") (Num 3))))
+; expr4 = 6 + 2 * x
+(let expr4 (Add (Num 6) (Mul (Num 2) (Var "x"))))
+(fail (check (= expr3 expr4)))
+(run 10)
+(check (= expr3 expr4))
+```
+
+Try this yourself first. One possible solution is below. This cell continues from the same live e-graph session as the upstream chapter.
+
+```egglog
+(rewrite (Mul a (Add b c))
+         (Add (Mul a b) (Mul a c)))
+(let expr3 (Mul (Num 2) (Add (Var "x") (Num 3))))
+(let expr4 (Add (Num 6) (Mul (Num 2) (Var "x"))))
+(fail (check (= expr3 expr4)))
+(run 10)
+(check (= expr3 expr4))
+(extract expr3)
+(extract expr4)
+```
+
+```elixir
+egglog = """
+(rewrite (Mul a (Add b c))
+         (Add (Mul a b) (Mul a c)))
+(let expr3 (Mul (Num 2) (Add (Var "x") (Num 3))))
+(let expr4 (Add (Num 6) (Mul (Num 2) (Var "x"))))
+(fail (check (= expr3 expr4)))
+(run 10)
+(check (= expr3 expr4))
+(extract expr3)
+(extract expr4)
+"""
+
+{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+Tutorial.print_outputs(result, egglog)
+Tutorial.summarize_egraph(egraph)
+```
+
+The first check is wrapped in `fail` because before running the new rule, `expr3` and `expr4` should not yet be known equal. After `run 10`, distributivity, commutativity, associativity, and constant folding are enough to put them in the same e-class.
+
+```elixir
+Egglog.EGraph.snapshot!(egraph)
+|> Tutorial.render_snapshot()
+```
+
+**Birewrite.** Egglog has the `birewrite` keyword, which is similar to `rewrite`, but it allows rewriting in both directions.
+
+Try making some of the rules above into `birewrite` rules. Looking at the rules we have defined:
+
+* When is a bidirectional equation useful for exploration?
+* When can it cause avoidable e-graph growth?
+* When is a direction not even well-defined because one side has variables or primitive computations that do not make sense in reverse?
+
+For example, commutativity is naturally bidirectional. Constant folding is not: `(Num (+ a b))` does not uniquely determine `a` and `b`.
+
+## Take Away
+
+Equality saturation is not normal-form rewriting. We did not choose one rewrite order and hope it was good. Instead, we accumulated many equivalent terms in one congruence structure, then asked extraction to choose a representative.
+
+The finite e-graph matters. Rules fire against represented terms and represented patterns; they do not enumerate all possible ground terms over the signature.

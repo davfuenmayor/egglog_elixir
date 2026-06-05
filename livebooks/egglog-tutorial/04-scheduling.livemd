@@ -1,0 +1,673 @@
+# Scheduling
+
+## Intro
+
+These notebooks are Livebook adaptations of the upstream egglog tutorial from https://egraphs-good.github.io/egglog-tutorial/. The egglog examples follow the upstream chapter order closely; the extra Elixir cells are there to make normally silent egglog state visible in Livebook.
+
+Each executable egglog block is sent directly to one live mutable `Egglog.EGraph` session. The helper below is only for displaying outputs and snapshots; the cells that change the e-graph call `Egglog.EGraph.run/3` themselves.
+
+When using the published package, replace the dependency with `{:egglog_elixir, "~> 0.1"}`.
+
+```elixir
+Mix.install([
+  {:egglog_elixir, path: Path.expand("../..", __DIR__)},
+  {:kino, "~> 0.19.0"}
+])
+```
+
+```elixir
+defmodule Tutorial do
+  def print_outputs(result, code \\ "") do
+    (result.outputs ++ check_outputs(code))
+    |> Enum.map(& &1.text)
+    |> Enum.reject(&is_nil/1)
+    |> Enum.map(&String.trim_trailing/1)
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.each(&IO.puts/1)
+  end
+
+  def render_snapshot(%{format: :svg, svg: svg}) when is_binary(svg) do
+    kino_html = Module.concat(Kino, HTML)
+
+    if Code.ensure_loaded?(kino_html) do
+      apply(kino_html, :new, [svg])
+    else
+      svg
+    end
+  end
+
+  def render_snapshot(%{text: text}), do: text
+
+  def summarize_egraph(egraph, opts \\ []) do
+    summary =
+      egraph
+      |> json_snapshot(opts)
+      |> Egglog.Snapshot.summary()
+
+    %{
+      e_nodes: summary.nodes,
+      e_classes: summary.classes,
+      by_operator: summary.operators,
+      omitted: summary.omitted
+    }
+  end
+
+  defp json_snapshot(egraph, opts) do
+    Egglog.EGraph.snapshot!(egraph, Keyword.merge([render: :json], opts))
+  end
+
+  defp check_outputs(code) do
+    code
+    |> String.split("\n")
+    |> Enum.map(&String.trim/1)
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.filter(&String.contains?(&1, "(check "))
+    |> Enum.map(fn line ->
+      text =
+        if String.starts_with?(line, "(fail ") do
+          "expected failure observed: #{line}"
+        else
+          "check succeeded: #{line}"
+        end
+
+      %{type: :check_success, text: text <> "\n"}
+    end)
+  end
+end
+
+{:ok, egraph} = Egglog.EGraph.new()
+```
+
+> Scope note: the executable part of this Livebook covers rulesets,
+> `run-schedule`, `saturate`, `repeat`, and ordinary `run`. The upstream
+> chapter also uses experimental conveniences and scheduler constructs from
+> `egglog-experimental`: `with-ruleset`, `let-scheduler`, `run-with`, and
+> `back-off`. `with-ruleset` is expanded below to ordinary `:ruleset`
+> annotations. The custom scheduler blocks are preserved as reference text
+> rather than executed through the thin wrapper.
+
+## Scheduling
+
+This chapter is about controlling when rules run.
+
+The key lesson is not that one schedule is always best. The key lesson is that equality saturation has two competing forces:
+
+* Analysis rules often derive useful facts without creating many new terms.
+* Optimization rewrites can create many equivalent terms, especially associativity and commutativity rules.
+
+Scheduling lets us spend budget where it matters. We start by using the same expression language as chapter 3.
+
+```egglog
+(datatype Expr
+    (Num BigRat)
+    (Var String)
+    (Add Expr Expr)
+    (Mul Expr Expr)
+    (Div Expr Expr))
+
+(let zero (bigrat (bigint 0) (bigint 1)))
+(let one (bigrat (bigint 1) (bigint 1)))
+(let two (bigrat (bigint 2) (bigint 1)))
+```
+
+```elixir
+egglog = """
+(datatype Expr
+    (Num BigRat)
+    (Var String)
+    (Add Expr Expr)
+    (Mul Expr Expr)
+    (Div Expr Expr))
+
+(let zero (bigrat (bigint 0) (bigint 1)))
+(let one (bigrat (bigint 1) (bigint 1)))
+(let two (bigrat (bigint 2) (bigint 1)))
+"""
+
+{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+Tutorial.print_outputs(result, egglog)
+```
+
+**Rulesets**
+
+Rulesets name groups of rules. Here we separate rules that derive semantic facts from rules that grow the syntactic search space.
+
+```egglog
+(ruleset optimizations)
+(ruleset analysis)
+```
+
+```elixir
+egglog = """
+(ruleset optimizations)
+(ruleset analysis)
+"""
+
+{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+Tutorial.print_outputs(result, egglog)
+```
+
+We can add rules to rulesets using the `:ruleset` annotation on `rule`s, `rewrite`s, and `birewrite`s.
+ Leaving off `:ruleset` causes the rule to be added to the default ruleset, which is what we've shown so far.
+ We can run rulesets using `(run ruleset iters)`, or `(run iters)` for running the default ruleset.
+
+Here, we add `leq` rules to the `analysis` ruleset, because they don't add new `Expr` nodes to the e-graph.
+
+```egglog
+(relation leq (Expr Expr))
+(rule ((leq e1 e2) (leq e2 e3)) ((leq e1 e3)) :ruleset analysis)
+(rule ((= e1 (Num n1)) (= e2 (Num n2)) (<= n1 n2)) ((leq e1 e2)) :ruleset analysis)
+(rule ((= v (Var x))) ((leq v v)) :ruleset analysis)
+(rule ((= e1 (Add e1a e1b)) (= e2 (Add e2a e2b)) (leq e1a e2a) (leq e1b e2b))
+      ((leq e1 e2))
+      :ruleset analysis)
+```
+
+```elixir
+egglog = """
+(relation leq (Expr Expr))
+(rule ((leq e1 e2) (leq e2 e3)) ((leq e1 e3)) :ruleset analysis)
+(rule ((= e1 (Num n1)) (= e2 (Num n2)) (<= n1 n2)) ((leq e1 e2)) :ruleset analysis)
+(rule ((= v (Var x))) ((leq v v)) :ruleset analysis)
+(rule ((= e1 (Add e1a e1b)) (= e2 (Add e2a e2b)) (leq e1a e2a) (leq e1b e2b))
+      ((leq e1 e2))
+      :ruleset analysis)
+"""
+
+{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+Tutorial.print_outputs(result, egglog)
+```
+
+In contrast, the following axiomatic rules are doing optimizations, so we add them to the `optimizations` ruleset.
+
+```egglog
+(birewrite (Add x (Add y z)) (Add (Add x y) z) :ruleset optimizations)
+(birewrite (Mul x (Mul y z)) (Mul (Mul x y) z) :ruleset optimizations)
+(rewrite (Add x y) (Add y x) :ruleset optimizations)
+(rewrite (Mul x y) (Mul y x) :ruleset optimizations)
+(rewrite (Mul x (Add y z)) (Add (Mul x y) (Mul x z)) :ruleset optimizations)
+(rewrite (Add x (Num zero)) x :ruleset optimizations)
+(rewrite (Mul x (Num one)) x :ruleset optimizations)
+(rewrite (Add (Num a) (Num b)) (Num (+ a b)) :ruleset optimizations)
+(rewrite (Mul (Num a) (Num b)) (Num (* a b)) :ruleset optimizations)
+```
+
+```elixir
+egglog = """
+(birewrite (Add x (Add y z)) (Add (Add x y) z) :ruleset optimizations)
+(birewrite (Mul x (Mul y z)) (Mul (Mul x y) z) :ruleset optimizations)
+(rewrite (Add x y) (Add y x) :ruleset optimizations)
+(rewrite (Mul x y) (Mul y x) :ruleset optimizations)
+(rewrite (Mul x (Add y z)) (Add (Mul x y) (Mul x z)) :ruleset optimizations)
+(rewrite (Add x (Num zero)) x :ruleset optimizations)
+(rewrite (Mul x (Num one)) x :ruleset optimizations)
+(rewrite (Add (Num a) (Num b)) (Num (+ a b)) :ruleset optimizations)
+(rewrite (Mul (Num a) (Num b)) (Num (* a b)) :ruleset optimizations)
+"""
+
+{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+Tutorial.print_outputs(result, egglog)
+```
+
+It is tedious and error-prone to manually annotate each rule with a ruleset,
+ so `egglog-experimental` provides a convenience syntax `with-ruleset`:
+
+```
+ (with-ruleset optimizations
+   (birewrite (Add x (Add y z)) (Add (Add x y) z))
+   ...
+ )
+```
+
+From now on, we will use this syntax.
+
+Here we add the rest of the rules from the last section, but tagged with the appropriate rulesets.
+
+```egglog
+(function upper-bound (Expr) BigRat :merge (min old new))
+(function lower-bound (Expr) BigRat :merge (max old new))
+(rule ((leq e (Num n))) ((set (upper-bound e) n)) :ruleset analysis)
+(rule ((leq (Num n) e)) ((set (lower-bound e) n)) :ruleset analysis)
+(rule ((= e (Add e1 e2)) (= (upper-bound e1) u1) (= (upper-bound e2) u2))
+          ((set (upper-bound e) (+ u1 u2))) :ruleset analysis)
+(rule ((= e (Add e1 e2)) (= (lower-bound e1) l1) (= (lower-bound e2) l2))
+        ((set (lower-bound e) (+ l1 l2))) :ruleset analysis)
+(rule ((= e (Mul e1 e2))
+           (= le1 (lower-bound e1)) (= le2 (lower-bound e2))
+           (= ue1 (upper-bound e1)) (= ue2 (upper-bound e2)))
+         ((set (lower-bound e)
+              (min (* le1 le2) (min (* le1 ue2) (min (* ue1 le2) (* ue1 ue2)))))
+          (set (upper-bound e)
+              (max (* le1 le2) (max (* le1 ue2) (max (* ue1 le2) (* ue1 ue2))))))
+     :ruleset analysis)
+
+(relation non-zero (Expr))
+(rule ((< (upper-bound e) zero)) ((non-zero e)) :ruleset analysis)
+(rule ((> (lower-bound e) zero)) ((non-zero e)) :ruleset analysis)
+```
+
+```elixir
+egglog = """
+(function upper-bound (Expr) BigRat :merge (min old new))
+(function lower-bound (Expr) BigRat :merge (max old new))
+(rule ((leq e (Num n))) ((set (upper-bound e) n)) :ruleset analysis)
+(rule ((leq (Num n) e)) ((set (lower-bound e) n)) :ruleset analysis)
+(rule ((= e (Add e1 e2)) (= (upper-bound e1) u1) (= (upper-bound e2) u2))
+          ((set (upper-bound e) (+ u1 u2))) :ruleset analysis)
+(rule ((= e (Add e1 e2)) (= (lower-bound e1) l1) (= (lower-bound e2) l2))
+        ((set (lower-bound e) (+ l1 l2))) :ruleset analysis)
+(rule ((= e (Mul e1 e2))
+           (= le1 (lower-bound e1)) (= le2 (lower-bound e2))
+           (= ue1 (upper-bound e1)) (= ue2 (upper-bound e2)))
+         ((set (lower-bound e)
+              (min (* le1 le2) (min (* le1 ue2) (min (* ue1 le2) (* ue1 ue2)))))
+          (set (upper-bound e)
+              (max (* le1 le2) (max (* le1 ue2) (max (* ue1 le2) (* ue1 ue2))))))
+     :ruleset analysis)
+
+(relation non-zero (Expr))
+(rule ((< (upper-bound e) zero)) ((non-zero e)) :ruleset analysis)
+(rule ((> (lower-bound e) zero)) ((non-zero e)) :ruleset analysis)
+"""
+
+{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+Tutorial.print_outputs(result, egglog)
+```
+
+Finally, we have optimization rules that depend on the analysis rules we defined above.
+
+```egglog
+(rewrite (Div x x)         (Num one) :when ((non-zero x)) :ruleset optimizations)
+(rewrite (Mul x (Div y x)) y         :when ((non-zero x)) :ruleset optimizations)
+```
+
+```elixir
+egglog = """
+(rewrite (Div x x)         (Num one) :when ((non-zero x)) :ruleset optimizations)
+(rewrite (Mul x (Div y x)) y         :when ((non-zero x)) :ruleset optimizations)
+"""
+
+{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+Tutorial.print_outputs(result, egglog)
+```
+
+Now consider the following program, which consists of a long sequence of additions _inside_
+ a cancelling division.
+
+```egglog
+(push)
+; a + (b + (c + (d + (e + f))))
+(let addition-chain 
+    (Add (Var "a") (Add (Var "b") 
+        (Add (Var "c") (Add (Var "d") 
+            (Add (Var "e") (Var "f")))))))
+; 1 + 1 + 1 + 1 + 2
+(let nonzero-expr 
+    (Add (Num one) (Add (Num one) 
+        (Add (Num one) (Add (Num one) (Num two))))))
+(let expr (Mul nonzero-expr (Div addition-chain nonzero-expr)))
+```
+
+```elixir
+egglog = """
+(push)
+(let addition-chain 
+    (Add (Var "a") (Add (Var "b") 
+        (Add (Var "c") (Add (Var "d") 
+            (Add (Var "e") (Var "f")))))))
+(let nonzero-expr 
+    (Add (Num one) (Add (Num one) 
+        (Add (Num one) (Add (Num one) (Num two))))))
+(let expr (Mul nonzero-expr (Div addition-chain nonzero-expr)))
+"""
+
+{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+Tutorial.print_outputs(result, egglog)
+```
+
+We want the following check to pass after running the rules.
+
+```egglog
+(fail (check (= expr addition-chain)))
+```
+
+```elixir
+egglog = """
+(fail (check (= expr addition-chain)))
+"""
+
+{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+Tutorial.print_outputs(result, egglog)
+```
+
+Before any schedule runs, the e-graph contains the long addition chain and the cancelling division, but not yet the analysis facts needed by the guarded rewrite.
+
+```elixir
+Tutorial.summarize_egraph(egraph)
+```
+
+```elixir
+Egglog.EGraph.snapshot!(egraph)
+|> Tutorial.render_snapshot()
+```
+
+To make this check pass, we have to first discover that `nonzero-expr` is indeed non-zero,
+ which allows the rule from `(Mul x (Div y x))` to `y` to fire.
+ On the other hand, if we apply the optimization rules, we risk the exponential blowup from 
+ the associative and commutative permutations of the `addition-chain`.
+
+Therefore, if we try to run both rulesets directly, egglog will spend lots of effort reassociating and
+ commuting the terms in the `addition-chain`, even though the optimization that we actually
+ want to run only takes one iteration. However, that optimization requires knowing a fact
+ that takes multiple iterations to compute (propagating lower- and upper-bounds
+ through `nonzero-expr`). We can build a more efficient *schedule*.
+
+```egglog
+(push)
+```
+
+```elixir
+egglog = """
+(push)
+"""
+
+{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+Tutorial.print_outputs(result, egglog)
+```
+
+**Schedules**
+
+Our schedule starts by saturating the analysis rules, fully propagating the `non-zero` information _without_
+ adding any e-nodes to the e-graph.
+
+```egglog
+(run-schedule (saturate (run analysis)))
+```
+
+```elixir
+egglog = """
+(run-schedule (saturate (run analysis)))
+"""
+
+{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+Tutorial.print_outputs(result, egglog)
+```
+
+After saturating only the analysis rules, the useful facts have been derived without running the associativity/commutativity-heavy optimization ruleset.
+
+Compare this summary with the previous one: the database has learned facts, but it has avoided most term explosion.
+
+```elixir
+Tutorial.summarize_egraph(egraph)
+```
+
+```elixir
+Egglog.EGraph.snapshot!(egraph)
+|> Tutorial.render_snapshot()
+```
+
+Then, just run one iteration of the `optimizations` ruleset.
+
+```egglog
+(run optimizations 1)
+```
+
+```elixir
+egglog = """
+(run optimizations 1)
+"""
+
+{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+Tutorial.print_outputs(result, egglog)
+```
+
+Now the guarded optimization has had a chance to use the analysis facts. Comparing this snapshot with the previous one shows why schedule order matters.
+
+```elixir
+Tutorial.summarize_egraph(egraph)
+```
+
+```elixir
+Egglog.EGraph.snapshot!(egraph)
+|> Tutorial.render_snapshot()
+```
+
+Or equivalently,
+
+```
+ (run-schedule 
+     (saturate (run analysis))
+     (run optimizations))
+```
+
+This makes our check pass
+
+```egglog
+(check (= expr addition-chain))
+(pop)
+```
+
+```elixir
+egglog = """
+(check (= expr addition-chain))
+(pop)
+"""
+
+{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+Tutorial.print_outputs(result, egglog)
+```
+
+The one-shot schedule above is effective for this specific term, but some problems require interleaving: optimize a little, analyze the new terms, optimize again. Egglog's scheduling language gives explicit control with primitives such as `repeat`, `seq`, `saturate`, and `run`.
+
+The idea behind the following schedule is to always saturate analyses before running optimizations.
+ This combination is wrapped in a `repeat` block to give us control over how long to run egglog.
+ With `repeat 1` it is the same schedule as before, but now we can increase the iteration
+ count if we want to optimize harder with more time and space budget.
+
+```egglog
+(run-schedule
+    (repeat 2
+        (saturate (run analysis))
+        (run optimizations)))
+(pop)
+```
+
+```elixir
+egglog = """
+(run-schedule
+    (repeat 2
+        (saturate (run analysis))
+        (run optimizations)))
+(pop)
+"""
+
+{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+Tutorial.print_outputs(result, egglog)
+```
+
+Running more iterations does not help our above example per se,
+ but if we had started with a slightly more complex program to optimize...
+
+```egglog
+; a + (b + (c + (d + (e + f))))
+(let addition-chain 
+    (Add (Var "a") (Add (Var "b") 
+        (Add (Var "c") (Add (Var "d") 
+            (Add (Var "e") (Var "f")))))))
+; x * 0
+(let x-times-zero (Mul (Var "x") (Num zero)))
+(let nonzero-expr 
+    (Add (Num one) (Add (Num one) 
+        (Add (Num one) (Add (Num one) 
+            x-times-zero)))))
+(let expr (Mul nonzero-expr (Div addition-chain nonzero-expr)))
+```
+
+```elixir
+egglog = """
+(let addition-chain 
+    (Add (Var "a") (Add (Var "b") 
+        (Add (Var "c") (Add (Var "d") 
+            (Add (Var "e") (Var "f")))))))
+(let x-times-zero (Mul (Var "x") (Num zero)))
+(let nonzero-expr 
+    (Add (Num one) (Add (Num one) 
+        (Add (Num one) (Add (Num one) 
+            x-times-zero)))))
+(let expr (Mul nonzero-expr (Div addition-chain nonzero-expr)))
+"""
+
+{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+Tutorial.print_outputs(result, egglog)
+```
+
+For the purpose of this example, we add this rule
+
+```egglog
+(rewrite (Mul x (Num zero)) (Num zero) :ruleset optimizations)
+```
+
+```elixir
+egglog = """
+(rewrite (Mul x (Num zero)) (Num zero) :ruleset optimizations)
+"""
+
+{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+Tutorial.print_outputs(result, egglog)
+```
+
+To prove `expr` is equivalent to `addition-chian` by applying the cancellation law, 
+ we need to prove `nonzero-expr` is nonzero, which requires proving
+ `x-times-zero`'s bound.
+ To show `x-time-zero`'s bound, we need to apply an optimization rule to rewrite
+ it to 0.
+ In other words, this requires running analyses in between two runs of optimization rules
+ (the cancellation law and `Mul`'s identity law)
+
+Therefore, only running our schedule with one iteration (`repeat 1`) does not give us the optimal program.
+
+```egglog
+(push)
+(run-schedule
+    (repeat 1
+        (saturate (run analysis))
+        (run optimizations)))
+(extract expr)
+(pop)
+```
+
+```elixir
+egglog = """
+(push)
+(run-schedule
+    (repeat 1
+        (saturate (run analysis))
+        (run optimizations)))
+(extract expr)
+(pop)
+"""
+
+{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+Tutorial.print_outputs(result, egglog)
+```
+
+Instead, we need to increase the iteration number.
+
+```egglog
+(push)
+(run-schedule
+    (repeat 2
+        (saturate (run analysis))
+        (run optimizations)))
+(extract expr)
+(pop)
+```
+
+```elixir
+egglog = """
+(push)
+(run-schedule
+    (repeat 2
+        (saturate (run analysis))
+        (run optimizations)))
+(extract expr)
+(pop)
+"""
+
+{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+Tutorial.print_outputs(result, egglog)
+```
+
+The contrast between `repeat 1` and `repeat 2` is the point of the example. The first schedule cannot prove enough facts before extraction; the second gives the analysis a second chance after optimization has simplified `x * 0`.
+
+**Using custom schedulers**
+
+However, sometimes just having an iteration number does not give you enough control.
+ For example, for many rules, such as associativity and commutativity (AC), the size of the e-graph grows hyper-exponentially
+ with respect to the number of iterations.
+
+Let's go back to this example, and run for five iterations.
+
+```egglog
+(push)
+(run-schedule
+    (repeat 5
+        (saturate (run analysis))
+        (run optimizations)))
+(print-size Mul)
+(pop)
+```
+
+```elixir
+egglog = """
+(push)
+(run-schedule
+    (repeat 5
+        (saturate (run analysis))
+        (run optimizations)))
+(print-size Mul)
+(pop)
+"""
+
+{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+Tutorial.print_outputs(result, egglog)
+```
+
+At iteration 5, the `Mul` function has size 582. However, if we bump that to 6,
+ the size of the `Mul` function will increase to 13285! Therefore, the iteration number is too coarse 
+ of a granularity for defining the search space.
+
+To this end, egglog provides a scheduler mechanism. A scheduler can decide which matches are important and need to be applied,
+ while others can be delayed or skipped. To use scheduler, there are two operations: `let-scheduler` and `run-with`.
+ `(let-scheduler sched ..)` instantiates a scheduler `sched`, and `(run-with sched ruleset)` rules a ruleset with that scheduler.
+
+Currently, `egglog-experimental` implements one scheduler, `back-off`. (We will implement our own scheduler
+ in Section 6.) The idea of `back-off` is that it will ban a rule from applying if that rule grows the
+ e-graph too fast. The decision to ban is based on a threshold, which is initially small and increases as rules are banned.
+ This scheduler works well when the ruleset contains explosive rules like AC.
+
+In this example, the back-off scheduler can prevent the associativity rule
+ from dominating the equality saturation: when the the associativity rule (or any other rule) is fired too much,
+ the scheduler will automatically ban this rule for a few iterations, so that other rules can catch up.
+
+```egglog
+(run-schedule
+    (let-scheduler bo (back-off))
+    (repeat 10 (run-with bo optimizations)))
+(print-size Mul)
+```
+
+> This block is reference code in this Livebook clone. It uses egglog functionality outside the thin Elixir wrapper path exercised here.
+
+It is important that the scheduler `bo` is instantiated outside the `repeat` loop, since each scheduler carries some state that is updated
+ when run. For example, the following schedule has a very semantics than the schedule above.
+
+```
+ (run-schedule
+     (repeat 10
+         (let-scheduler bo (back-off))
+         (run-with bo optimizations)))
+```
+
+This schedule instantiates a (fresh) `back-off` scheduler for each `run-with`, so the ten iterations of rulesets are all run
+ with the initial configuration of the `back-off` scheduler, which has a very low threshold for banning rules.

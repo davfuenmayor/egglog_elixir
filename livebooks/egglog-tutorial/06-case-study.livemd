@@ -1,0 +1,196 @@
+# Case study: LA compiler
+
+## Intro
+
+These notebooks are Livebook adaptations of the upstream egglog tutorial from https://egraphs-good.github.io/egglog-tutorial/. The egglog examples follow the upstream chapter order closely; the extra Elixir cells are there to make normally silent egglog state visible in Livebook.
+
+Each executable egglog block is sent directly to one live mutable `Egglog.EGraph` session. The helper below is only for displaying outputs and snapshots; the cells that change the e-graph call `Egglog.EGraph.run/3` themselves.
+
+When using the published package, replace the dependency with `{:egglog_elixir, "~> 0.1"}`.
+
+```elixir
+Mix.install([
+  {:egglog_elixir, path: Path.expand("../..", __DIR__)},
+  {:kino, "~> 0.19.0"}
+])
+```
+
+```elixir
+defmodule Tutorial do
+  def print_outputs(result, code \\ "") do
+    (result.outputs ++ check_outputs(code))
+    |> Enum.map(& &1.text)
+    |> Enum.reject(&is_nil/1)
+    |> Enum.map(&String.trim_trailing/1)
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.each(&IO.puts/1)
+  end
+
+  def render_snapshot(%{format: :svg, svg: svg}) when is_binary(svg) do
+    kino_html = Module.concat(Kino, HTML)
+
+    if Code.ensure_loaded?(kino_html) do
+      apply(kino_html, :new, [svg])
+    else
+      svg
+    end
+  end
+
+  def render_snapshot(%{text: text}), do: text
+
+  def summarize_egraph(egraph, opts \\ []) do
+    summary =
+      egraph
+      |> json_snapshot(opts)
+      |> Egglog.Snapshot.summary()
+
+    %{
+      e_nodes: summary.nodes,
+      e_classes: summary.classes,
+      by_operator: summary.operators,
+      omitted: summary.omitted
+    }
+  end
+
+  defp json_snapshot(egraph, opts) do
+    Egglog.EGraph.snapshot!(egraph, Keyword.merge([render: :json], opts))
+  end
+
+  defp check_outputs(code) do
+    code
+    |> String.split("\n")
+    |> Enum.map(&String.trim/1)
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.filter(&String.contains?(&1, "(check "))
+    |> Enum.map(fn line ->
+      text =
+        if String.starts_with?(line, "(fail ") do
+          "expected failure observed: #{line}"
+        else
+          "check succeeded: #{line}"
+        end
+
+      %{type: :check_success, text: text <> "\n"}
+    end)
+  end
+end
+
+{:ok, egraph} = Egglog.EGraph.new()
+```
+
+> Scope note: this case study is about using egglog as a Rust library. It
+> involves a custom parser, AST lowering, Rust-side command construction,
+> `extract_value_with_cost_model`, custom schedulers, and custom cost models.
+> The Livebook preserves the upstream tutorial text and points to the upstream
+> Rust project, but it does not reimplement those Rust extension hooks through
+> the thin Elixir wrapper.
+
+## Case study: LA compiler
+
+This chapter is different from the previous ones. The earlier chapters taught the egglog language through the thin Elixir wrapper. This case study is about what you can do when you embed egglog as a Rust library and extend it.
+
+The important boundary is:
+
+* The Elixir wrapper can run ordinary egglog programs, inspect outputs, take snapshots, and keep a live e-graph session.
+* This case study customizes Rust-side parsing, scheduling, and cost-model behavior. Those extension hooks are not reimplemented in the thin wrapper.
+* The Livebook therefore serves as a guided map of the upstream case-study source rather than as an executable Elixir reconstruction.
+
+The upstream case-study project is here:
+
+<https://github.com/egraphs-good/egglog-tutorial/tree/main/case-study-linear-algebra-compiler>
+
+This library does not vendor that Rust project. The notes below describe the
+case study conceptually so `egglog_elixir` remains self-contained.
+
+In this section, we learn about functionality egglog provides as a Rust library. Besides providing basic e-graph operations, egglog allows extensions in base values, primitive functions, containers, schedulers, commands, and cost models.
+
+For the first half of the case study, we will use the E-graph operations egglog provides to
+ build a compiler for linear algebra. For the second half, we will showcase how we can extend
+ egglog with application-specific scheduler and cost models.
+
+The code is accessible at this [GitHub directory](https://github.com/egraphs-good/egglog-tutorial/tree/main/case-study-linear-algebra-compiler).
+ To see the answer to each question, please take a look at the `solutions` branch.
+
+**Language for Linear Algebra**
+
+The input language for the compiler is a simple straight-line language
+ consisting of a list of declarations, followed by a list
+ of bindings. Each declaration declares an input from the user and has the form
+
+```
+ V: Type;
+```
+
+where `V` is a variable name and `Type` is either `R` (reals) or `[R; NxM]` (matrix of dimension `N x M`, where `N` and `M` are natural numbers).
+
+Each binding has the form
+
+```
+ V = E;
+```
+
+where `V` is a variable name and `E` is a variable, a number, or binary expressions with
+ operators  `*`, `/`, `+`, `-`.
+
+For example, below is a General Matrix-Multiply (GEMM) operation expressed in our DSL.
+
+```
+ a: R;
+ b: R;
+ A: [R; 32x32];
+ B: [R; 32x32];
+ C: [R; 32x32];
+ R = a*(A*B)+b*C;
+```
+
+Note that the semantics of binary operators are overloaded: `*` can mean any of matrix 
+ multiplication, scalar-matrix multiplication, or scalar multiplication, depending on the types
+ of its operands.
+
+The parser for this language has already been implemented. The result of parsing is stored in the Rust `CoreBindings` struct in `src/ast.rs`.
+
+For an Elixir user, the conceptual translation is: the host language parses a user-facing DSL, lowers it to egglog terms, runs saturation, extracts a representative, and prints the optimized DSL back out. The thin wrapper does the middle part; the case study demonstrates how far one can go when the host language is Rust and can plug into egglog internals directly.
+
+**Part 1: Building the initial e-graph**
+
+In this part, we will process the parsed expressions and turn them into egglog ASTs.
+ To start, take a look at the schema definitions in `src/defn.egg`.
+ There are several ways of running egglog in Rust: the user can call 
+ `EGraph::parse_and_run_program` with the program string, call `EGraph::run_program` with a 
+ command AST, or define rules using the convenience method provided in `egglog::prelude::*`. In 
+ this part, we will use `EGraph::parse_and_run_program` for Problems 1 and 2, and 
+ `EGraph::run_program`  for Problem 3.
+
+The corresponding thin-wrapper mental model is `Egglog.EGraph.run(egraph, source)`: send egglog source to a live e-graph. The Rust case study goes lower level because it constructs and runs command ASTs directly.
+
+**Part 2: Running optimizations**
+
+We then run the rules we defined in `src/defn.egg` to grow the e-graph (Problem 4). 
+ After the e-graph is grown, we will run e-graph extraction to obtain the optimized program 
+ (Problem 5). To extract a program from the e-graph, you can use 
+ `EGraph::extract_value_with_cost_model`, which requires a cost model as the input.
+ Since we used dynamic cost (via `set-cost`) in our egglog program, we need to use 
+ `DynamicCostModel` from `egglog-experimental` to ensure the cost incorporates those dynamically set.
+
+This is the same extraction story as chapter 5, but with a richer cost model. Chapter 5 showed static constructor costs; the case study uses matrix dimensions and dynamic costs to prefer cheaper linear-algebra plans.
+
+**Part 3: Custom scheduling and cost models**
+
+In this part, we will further customize egglog's capability.
+ In Problem 7, we will implement `FirstNScheduler`, which applies at most `N` matches in each iteration.
+ Every scheduler in `egglog` needs to implement a `filter_matches` method, which takes rule metainfo and a `Matches` struct.
+ The `Matches` struct encapsulates a set of matches and allows users to choose the
+ subset of matches to be applied.
+ Matches that are not chosen for application will be delayed for scheduling to the next iteration.
+ Additionally, `filter_matches` returns a boolean flag, indicating whether the next run of the 
+ rule needs to search the database again to fetch more matches.
+ For instance, if the scheduler decides to not mark any match for application in the current 
+ iteration, it may also not want to request more matches until the current batch of matches is 
+ applied.
+
+In problem 8, we will customize the cost model. We will define a cost model that prefers terms 
+ with smaller depth. Such a cost model is useful when e.g., we want to minimize the depth of 
+ computation for maximal parallelism. The cost model can be defined in egglog by implementing
+ the `CostModel` trait, which requires the user to define the cost of an e-node, a container 
+ node, a base value, and additionally, the cost of an AST given the cost of the node itself 
+ and its children.

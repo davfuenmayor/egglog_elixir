@@ -1,0 +1,13 @@
+[package]
+name = "egglog_nif"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+egglog = { git = "https://github.com/egraphs-good/egglog.git", rev = "f0da95b0611a7c0be28d89b17e05a11b4490c6b0", default-features = false, features = ["graphviz", "serde"] }
+rustler = "0.38.0"
+serde_json = "1.0"

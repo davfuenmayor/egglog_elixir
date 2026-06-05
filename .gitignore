@@ -1,0 +1,40 @@
+# Elixir / Mix build artifacts
+/_build/
+/deps/
+/cover/
+/doc/
+/tmp/
+
+# Rustler / native build artifacts
+/priv/native/
+/native/**/target/
+
+# Package/archive outputs
+*.ez
+egglog_elixir-*.tar
+/egglog_elixir-*/
+
+# Crash dumps and runtime logs
+erl_crash.dump
+*.dump
+*.log
+
+# Livebook local state and generated exports/artifacts
+.livemd_checkpoints/
+**/.livemd_checkpoints/
+livebook_import/
+livebook_uploads/
+*.livemd.autosave
+*.dot
+*.svg
+
+# Elixir language server and editor state
+/.elixir_ls/
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db

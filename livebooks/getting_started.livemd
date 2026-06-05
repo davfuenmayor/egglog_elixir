@@ -1,0 +1,419 @@
+# Getting Started With Egglog Elixir
+
+## Prerequisites
+
+This notebook uses `egglog_elixir`, which includes a Rustler NIF. Rustler
+compiles a small native Rust library the first time Livebook evaluates
+`Mix.install/1`.
+
+The Livebook runtime must have:
+
+* Rust installed
+* `cargo` available on `PATH`
+* Graphviz installed, with `dot` available on `PATH`, if you want SVG e-graph pictures
+
+Check this in the same shell or container that starts Livebook:
+
+```bash
+cargo --version
+rustc --version
+dot -V
+```
+
+If Cargo is installed through rustup, make sure Livebook sees it:
+
+```bash
+export PATH="$HOME/.cargo/bin:$PATH"
+livebook server
+```
+
+When using the published package, replace the dependency with `{:egglog_elixir, "~> 0.1"}`.
+
+```elixir
+Mix.install([
+  {:egglog_elixir, path: Path.expand("..", __DIR__)},
+  {:kino, "~> 0.19.0"}
+])
+```
+
+## What This Notebook Teaches
+
+This is a first-pass tour of the wrapper. It keeps the egglog language visible
+and uses Elixir only to load theories, submit problems, print outputs,
+and render snapshots.
+
+The examples are a small "best of" from the first three upstream egglog
+tutorial chapters:
+
+* equality saturation over symbolic arithmetic
+* congruence closure through constructors
+* Datalog-style reachability
+* analysis facts used as guards for rewrites
+* the difference between `Egglog.Program` and `Egglog.EGraph`
+
+The important boundary is:
+
+* egglog does parsing, e-matching, congruence closure, Datalog evaluation,
+  rebuilding, scheduling, and extraction
+* Elixir submits source/input and receives outputs
+* snapshots come from native egglog serialization, not from an Elixir graph
+  reconstruction
+
+## Tiny Helpers
+
+These helpers are display-only. They do not run egglog.
+
+```elixir
+defmodule GettingStarted do
+  def print_output(result, type) do
+    result.outputs
+    |> Enum.filter(&(&1.type == type))
+    |> Enum.map(& &1.text)
+    |> Enum.reject(&is_nil/1)
+    |> Enum.map(&String.trim_trailing/1)
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.each(&IO.puts/1)
+  end
+
+  def print_outputs(result) do
+    result.outputs
+    |> Enum.map(& &1.text)
+    |> Enum.reject(&is_nil/1)
+    |> Enum.map(&String.trim_trailing/1)
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.each(&IO.puts/1)
+  end
+
+  def show_run(result) do
+    %{
+      status: result.status,
+      stats: result.stats
+    }
+  end
+
+  def render_snapshot(%{format: :svg, svg: svg}) when is_binary(svg) do
+    kino_html = Module.concat(Kino, HTML)
+
+    if Code.ensure_loaded?(kino_html) do
+      apply(kino_html, :new, [svg])
+    else
+      svg
+    end
+  end
+
+  def render_snapshot(%{text: text}), do: text
+
+  def snapshot_summary(snapshot) do
+    summary = Egglog.Snapshot.summary(snapshot)
+
+    %{
+      e_nodes: summary.nodes,
+      e_classes: summary.classes,
+      by_operator: summary.operators,
+      omitted: summary.omitted
+    }
+  end
+end
+```
+
+## 1. A Loaded Program
+
+Use `Egglog.Program` when you have a reusable theory and want each query to be
+isolated from the others.
+
+The theory below declares a tiny arithmetic language and a few equations. In
+universal-algebra terms, the datatype gives us a finite signature; the rewrite
+rules generate equalities in the quotient term algebra.
+
+```elixir
+math_theory = """
+(datatype Math
+  (Num i64)
+  (Var String)
+  (Add Math Math)
+  (Mul Math Math))
+
+(rewrite (Add (Num a) (Num b)) (Num (+ a b)))
+(rewrite (Mul (Num a) (Num b)) (Num (* a b)))
+(rewrite (Add (Mul a x) (Mul b x)) (Mul (Add a b) x))
+(rewrite (Add x (Num 0)) x)
+(rewrite (Mul x (Num 1)) x)
+"""
+
+math = Egglog.Program.load!(math_theory)
+```
+
+Now submit one query-local term and ask for extraction.
+
+```elixir
+input = %{
+  terms: %{
+    "goal" => "(Add (Mul (Num 3) (Var \"x\")) (Mul (Num 4) (Var \"x\")))"
+  },
+  budget: %{rounds: 5},
+  requests: [%{type: :extract, expr: "goal"}]
+}
+
+result = Egglog.Program.run!(math, input)
+
+GettingStarted.print_output(result, :extract)
+GettingStarted.show_run(result)
+```
+
+The extracted term is the representative chosen by egglog after saturation.
+Elixir did not simplify the expression. Native egglog matched the rewrite
+schemas, added equalities, rebuilt congruence closure, and extracted a cheap
+representative.
+
+## 2. Looking Inside
+
+Most egglog commands are quiet when they succeed. A snapshot lets us inspect
+what native egglog built.
+
+```elixir
+snapshot = Egglog.snapshot!(math, input)
+
+GettingStarted.snapshot_summary(
+  Egglog.snapshot!(math, input, render: :json)
+)
+```
+
+```elixir
+GettingStarted.render_snapshot(snapshot)
+```
+
+The picture is not a rewrite trace. Equality saturation keeps several
+equivalent syntactic forms in one e-class and postpones the choice of a concrete
+representative until extraction.
+
+## 3. Checks And Congruence Closure
+
+Checks are assertions about the current e-graph. With `Egglog.Program`, we can
+add query-local unions without mutating the loaded base.
+
+```elixir
+congruence_theory = """
+(datatype Term
+  (A)
+  (B)
+  (Wrap Term)
+  (Pair Term Term))
+"""
+
+cc = Egglog.Program.load!(congruence_theory)
+```
+
+First, without an equality between `A` and `B`, the two context terms are
+distinct.
+
+```elixir
+before_union =
+  Egglog.Program.run!(cc, %{
+    terms: %{
+      "left" => "(Pair (Wrap (A)) (A))",
+      "right" => "(Pair (Wrap (B)) (B))"
+    },
+    requests: [
+      %{type: :extract, expr: "left"},
+      %{type: :extract, expr: "right"}
+    ]
+  })
+
+GettingStarted.print_outputs(before_union)
+```
+
+Now assert `A = B` for this query. Congruence closure propagates that equality
+through `Wrap` and `Pair`.
+
+```elixir
+after_union_input = %{
+  terms: %{
+    "left" => "(Pair (Wrap (A)) (A))",
+    "right" => "(Pair (Wrap (B)) (B))"
+  },
+  unions: [{"(A)", "(B)"}],
+  budget: %{rounds: 1},
+  requests: [
+    "(check (= left right))",
+    %{type: :extract, expr: "left"}
+  ]
+}
+
+after_union = Egglog.Program.run!(cc, after_union_input)
+
+GettingStarted.print_output(after_union, :extract)
+GettingStarted.show_run(after_union)
+```
+
+```elixir
+Egglog.snapshot!(cc, after_union_input)
+|> GettingStarted.render_snapshot()
+```
+
+The equality was asserted only at the leaves, but native rebuild maintains the
+congruence invariant: equal children imply equal parent applications.
+
+## 4. Datalog Facts
+
+Egglog is also a Datalog-style engine. Relations are represented as
+unit-valued functions, and rules derive new rows.
+
+This example computes transitive reachability.
+
+```elixir
+reachability_theory = """
+(relation edge (i64 i64))
+(relation path (i64 i64))
+
+(rule ((edge x y))
+      ((path x y)))
+
+(rule ((path x y) (edge y z))
+      ((path x z)))
+"""
+
+reach = Egglog.Program.load!(reachability_theory)
+```
+
+Submit a small graph as query-local facts.
+
+```elixir
+reach_input = %{
+  facts: [
+    "(edge 1 2)",
+    "(edge 2 3)",
+    "(edge 3 4)"
+  ],
+  budget: %{rounds: 5},
+  requests: [
+    "(check (path 1 4))",
+    %{type: :print_function, name: "path", limit: 20}
+  ]
+}
+
+reach_result = Egglog.Program.run!(reach, reach_input)
+
+GettingStarted.print_output(reach_result, :print_function)
+GettingStarted.show_run(reach_result)
+```
+
+The interesting point is that the same native runtime is maintaining both
+relations and equality. We will use that combination in the next example.
+
+## 5. Analysis Facts Guard Rewrites
+
+Many equations are valid only under hypotheses. Instead of writing an Elixir
+callback, keep the hypothesis in egglog as a relation.
+
+Here `(Div x x) = 1` is allowed only when `x` is known to be non-zero.
+
+```elixir
+guarded_theory = """
+(datatype Math
+  (Num i64)
+  (Div Math Math))
+
+(relation non-zero (Math))
+
+(rewrite (Div x x) (Num 1)
+  :when ((non-zero x)))
+"""
+
+guarded = Egglog.Program.load!(guarded_theory)
+```
+
+Without the fact, extraction returns the original division.
+
+```elixir
+without_guard_input = %{
+  terms: %{"x" => "(Div (Num 2) (Num 2))"},
+  budget: %{rounds: 2},
+  requests: [%{type: :extract, expr: "x"}]
+}
+
+without_guard = Egglog.Program.run!(guarded, without_guard_input)
+
+GettingStarted.print_output(without_guard, :extract)
+```
+
+With the fact, the guarded rewrite fires.
+
+```elixir
+with_guard_input = %{
+  terms: %{"x" => "(Div (Num 2) (Num 2))"},
+  facts: ["(non-zero (Num 2))"],
+  budget: %{rounds: 2},
+  requests: [%{type: :extract, expr: "x"}]
+}
+
+with_guard = Egglog.Program.run!(guarded, with_guard_input)
+
+GettingStarted.print_output(with_guard, :extract)
+```
+
+```elixir
+Egglog.snapshot!(guarded, with_guard_input)
+|> GettingStarted.render_snapshot()
+```
+
+The relation `non-zero` is an analysis fact. Once it is present, egglog can
+justify the equality between the division term and `(Num 1)`.
+
+## 6. Stateful Sessions
+
+`Egglog.Program` is query-local: every run clones the loaded base and temporary
+facts do not accumulate. For interactive work, use `Egglog.EGraph` instead.
+
+```elixir
+{:ok, egraph} =
+  Egglog.EGraph.new("""
+  (datatype Math
+    (Num i64)
+    (Add Math Math))
+  """)
+```
+
+Each successful `run/3` mutates this one native session.
+
+```elixir
+{:ok, _} = Egglog.EGraph.run(egraph, "(let x (Add (Num 1) (Num 0)))")
+{:ok, _} = Egglog.EGraph.run(egraph, "(rewrite (Add a (Num 0)) a)")
+
+{:ok, egraph_result} =
+  Egglog.EGraph.run(egraph, """
+  (run 2)
+  (check (= x (Num 1)))
+  (extract x)
+  """)
+
+GettingStarted.print_output(egraph_result, :extract)
+```
+
+Because the state persists, later calls can inspect what earlier calls inserted.
+
+```elixir
+{:ok, true} = Egglog.EGraph.check(egraph, "(= x (Num 1))")
+{:ok, "(Num 1)"} = Egglog.EGraph.extract(egraph, "x")
+```
+
+```elixir
+Egglog.EGraph.snapshot!(egraph)
+|> GettingStarted.render_snapshot()
+```
+
+Use the two models deliberately:
+
+* `Egglog.Program` for reproducible, isolated queries against a loaded theory.
+* `Egglog.EGraph` for REPL/Livebook sessions where state should accumulate.
+
+## What To Try Next
+
+Natural next steps:
+
+* Open `livebooks/egglog-tutorial/01-basics.livemd` for a deeper equality
+  saturation walkthrough.
+* Open `livebooks/egglog-tutorial/02-datalog.livemd` for more relational
+  examples.
+* Open `livebooks/egglog-tutorial/03-analysis.livemd` for richer analysis facts
+  and guarded rewrites.
+* Change the arithmetic rules above and watch how the snapshot changes.

@@ -1,0 +1,675 @@
+# E-class analysis
+
+## Intro
+
+These notebooks are Livebook adaptations of the upstream egglog tutorial from https://egraphs-good.github.io/egglog-tutorial/. The egglog examples follow the upstream chapter order closely; the extra Elixir cells are there to make normally silent egglog state visible in Livebook.
+
+Each executable egglog block is sent directly to one live mutable `Egglog.EGraph` session. The helper below is only for displaying outputs and snapshots; the cells that change the e-graph call `Egglog.EGraph.run/3` themselves.
+
+When using the published package, replace the dependency with `{:egglog_elixir, "~> 0.1"}`.
+
+```elixir
+Mix.install([
+  {:egglog_elixir, path: Path.expand("../..", __DIR__)},
+  {:kino, "~> 0.19.0"}
+])
+```
+
+```elixir
+defmodule Tutorial do
+  def print_outputs(result, code \\ "") do
+    (result.outputs ++ check_outputs(code))
+    |> Enum.map(& &1.text)
+    |> Enum.reject(&is_nil/1)
+    |> Enum.map(&String.trim_trailing/1)
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.each(&IO.puts/1)
+  end
+
+  def render_snapshot(%{format: :svg, svg: svg}) when is_binary(svg) do
+    kino_html = Module.concat(Kino, HTML)
+
+    if Code.ensure_loaded?(kino_html) do
+      apply(kino_html, :new, [svg])
+    else
+      svg
+    end
+  end
+
+  def render_snapshot(%{text: text}), do: text
+
+  def summarize_egraph(egraph, opts \\ []) do
+    summary =
+      egraph
+      |> json_snapshot(opts)
+      |> Egglog.Snapshot.summary()
+
+    %{
+      e_nodes: summary.nodes,
+      e_classes: summary.classes,
+      by_operator: summary.operators,
+      omitted: summary.omitted
+    }
+  end
+
+  defp json_snapshot(egraph, opts) do
+    Egglog.EGraph.snapshot!(egraph, Keyword.merge([render: :json], opts))
+  end
+
+  defp check_outputs(code) do
+    code
+    |> String.split("\n")
+    |> Enum.map(&String.trim/1)
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.filter(&String.contains?(&1, "(check "))
+    |> Enum.map(fn line ->
+      text =
+        if String.starts_with?(line, "(fail ") do
+          "expected failure observed: #{line}"
+        else
+          "check succeeded: #{line}"
+        end
+
+      %{type: :check_success, text: text <> "\n"}
+    end)
+  end
+end
+
+{:ok, egraph} = Egglog.EGraph.new()
+```
+
+## E-class analysis
+
+In this lesson, we combine equality saturation with analysis facts. Think of an analysis as extra information attached to the finite quotient represented by the e-graph.
+
+The pattern is:
+
+1. Define a term language.
+2. Define relations or functions that describe semantic facts about terms.
+3. Add rules that derive those facts.
+4. Add rewrites that make more syntactic variants available.
+5. Use the derived facts to justify guarded rewrites.
+
+This is where egglog starts to feel different from a plain rewrite engine: the e-graph is not only storing equivalent syntax; it is also a database of facts about that syntax.
+
+Our first example will continue with the `path` example in lesson 2.
+ In this case, there is a path from `e1` to `e2` if `e1` is less than or equal to `e2`.
+
+```egglog
+(datatype Expr
+    ; in this example we use big 🐀 to represent numbers
+    ; you can find a list of primitive types in the standard library in `src/sort`
+    (Num BigRat)
+    (Var String)
+    (Add Expr Expr)
+    (Mul Expr Expr)
+    (Div Expr Expr))
+```
+
+```elixir
+egglog = """
+(datatype Expr
+    (Num BigRat)
+    (Var String)
+    (Add Expr Expr)
+    (Mul Expr Expr)
+    (Div Expr Expr))
+"""
+
+{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+Tutorial.print_outputs(result, egglog)
+```
+
+Let's define some BigRat constants that will be useful later.
+
+```egglog
+(let zero (bigrat (bigint 0) (bigint 1)))
+(let one (bigrat (bigint 1) (bigint 1)))
+(let two (bigrat (bigint 2) (bigint 1)))
+```
+
+```elixir
+egglog = """
+(let zero (bigrat (bigint 0) (bigint 1)))
+(let one (bigrat (bigint 1) (bigint 1)))
+(let two (bigrat (bigint 2) (bigint 1)))
+"""
+
+{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+Tutorial.print_outputs(result, egglog)
+```
+
+We define a less-than-or-equal-to relation between two expressions.
+ `(leq a b)` means that `a <= b` for all possible values of variables.
+
+```egglog
+(relation leq (Expr Expr))
+```
+
+```elixir
+egglog = """
+(relation leq (Expr Expr))
+"""
+
+{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+Tutorial.print_outputs(result, egglog)
+```
+
+We define rules to deduce the `leq` relation. We start with transitivity of `leq`:
+
+```egglog
+(rule (
+    (leq e1 e2)
+    (leq e2 e3)
+) (
+    (leq e1 e3)
+))
+```
+
+```elixir
+egglog = """
+(rule (
+    (leq e1 e2)
+    (leq e2 e3)
+) (
+    (leq e1 e3)
+))
+"""
+
+{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+Tutorial.print_outputs(result, egglog)
+```
+
+We can define a few axioms for deciding when one expression is less than or equal to another.
+
+Base case for `leq` for `Num`:
+
+```egglog
+(rule (
+    (= e1 (Num n1))
+    (= e2 (Num n2))
+    (<= n1 n2)
+) (
+    (leq e1 e2)
+))
+```
+
+```elixir
+egglog = """
+(rule (
+    (= e1 (Num n1))
+    (= e2 (Num n2))
+    (<= n1 n2)
+) (
+    (leq e1 e2)
+))
+"""
+
+{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+Tutorial.print_outputs(result, egglog)
+```
+
+Base case for `leq` for `Var`:
+
+```egglog
+(rule (
+    (= v (Var x))
+) (
+    (leq v v)
+))
+```
+
+```elixir
+egglog = """
+(rule (
+    (= v (Var x))
+) (
+    (leq v v)
+))
+"""
+
+{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+Tutorial.print_outputs(result, egglog)
+```
+
+Recursive case for `leq` for `Add`:
+
+```egglog
+(rule (
+    (= e1 (Add e1a e1b))
+    (= e2 (Add e2a e2b))
+    (leq e1a e2a)
+    (leq e1b e2b)
+) (
+    (leq e1 e2)
+))
+```
+
+```elixir
+egglog = """
+(rule (
+    (= e1 (Add e1a e1b))
+    (= e2 (Add e2a e2b))
+    (leq e1a e2a)
+    (leq e1b e2b)
+) (
+    (leq e1 e2)
+))
+"""
+
+{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+Tutorial.print_outputs(result, egglog)
+```
+
+Note that we have not defined any rules for multiplication. This would require a more complex
+ analysis on the positivity of the expressions.
+
+On the other hand, these rules by themselves are pretty weak. For example, they cannot deduce `x + 1 <= 2 + x`.
+ But EqSat-style axiomatic rules make these rules more powerful:
+
+```egglog
+(birewrite (Add x (Add y z)) (Add (Add x y) z))
+(birewrite (Mul x (Mul y z)) (Mul (Mul x y) z))
+(rewrite (Add x y) (Add y x))
+(rewrite (Mul x y) (Mul y x))
+(rewrite (Mul x (Add y z)) (Add (Mul x y) (Mul x z)))
+(rewrite (Add x (Num zero)) x)
+(rewrite (Mul x (Num one)) x)
+(rewrite (Add (Num a) (Num b)) (Num (+ a b)))
+(rewrite (Mul (Num a) (Num b)) (Num (* a b)))
+```
+
+```elixir
+egglog = """
+(birewrite (Add x (Add y z)) (Add (Add x y) z))
+(birewrite (Mul x (Mul y z)) (Mul (Mul x y) z))
+(rewrite (Add x y) (Add y x))
+(rewrite (Mul x y) (Mul y x))
+(rewrite (Mul x (Add y z)) (Add (Mul x y) (Mul x z)))
+(rewrite (Add x (Num zero)) x)
+(rewrite (Mul x (Num one)) x)
+(rewrite (Add (Num a) (Num b)) (Num (+ a b)))
+(rewrite (Mul (Num a) (Num b)) (Num (* a b)))
+"""
+
+{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+Tutorial.print_outputs(result, egglog)
+```
+
+To check our rules, we define two concrete expressions. Before saturation, the `leq` fact is intentionally absent. After saturation, the equality-saturation rules expose enough equivalent forms for the analysis rules to prove the inequality.
+
+```egglog
+(let expr1 (Add (Var "y") (Add (Num two) (Var "x"))))
+(let expr2 (Add (Add (Add (Var "x") (Var "y")) (Num one)) (Num two)))
+
+(fail (check (leq expr1 expr2)))
+(run-schedule (saturate (run)))
+(check (leq expr1 expr2))
+```
+
+```elixir
+egglog = """
+(let expr1 (Add (Var "y") (Add (Num two) (Var "x"))))
+(let expr2 (Add (Add (Add (Var "x") (Var "y")) (Num one)) (Num two)))
+
+(fail (check (leq expr1 expr2)))
+(run-schedule (saturate (run)))
+(check (leq expr1 expr2))
+"""
+
+{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+Tutorial.print_outputs(result, egglog)
+```
+
+The visualization now contains both expression nodes and the `leq` relation facts that made the final check succeed. This is a good place to see analysis data living beside the equality structure.
+
+```elixir
+Tutorial.summarize_egraph(egraph)
+```
+
+```elixir
+Egglog.EGraph.snapshot!(egraph)
+|> Tutorial.render_snapshot()
+```
+
+A useful special case of the `leq` analysis is interval analysis: record an upper bound and a lower bound for an expression when one is known. These are functions, not relations, because we want one best value per expression.
+
+```egglog
+(function upper-bound (Expr) BigRat :merge (min old new))
+(function lower-bound (Expr) BigRat :merge (max old new))
+```
+
+```elixir
+egglog = """
+(function upper-bound (Expr) BigRat :merge (min old new))
+(function lower-bound (Expr) BigRat :merge (max old new))
+"""
+
+{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+Tutorial.print_outputs(result, egglog)
+```
+
+The merge expressions encode the lattice operation:
+
+* for upper bounds, keep the smaller bound;
+* for lower bounds, keep the larger bound.
+
+This is the analysis analogue of quotienting terms: many derivations may produce information about the same expression, and egglog needs a principled way to merge those outputs.
+
+```egglog
+(rule (
+    (leq e (Num n))
+) (
+    (set (upper-bound e) n)
+))
+
+(rule (
+    (leq (Num n) e)
+) (
+    (set (lower-bound e) n)
+))
+```
+
+```elixir
+egglog = """
+(rule (
+    (leq e (Num n))
+) (
+    (set (upper-bound e) n)
+))
+
+(rule (
+    (leq (Num n) e)
+) (
+    (set (lower-bound e) n)
+))
+"""
+
+{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+Tutorial.print_outputs(result, egglog)
+```
+
+We can define more specific rules for obtaining the upper and lower bounds of an expression
+ based on the upper and lower bounds of its children.
+
+```egglog
+(rule (
+    (= e (Add e1 e2))
+    (= (upper-bound e1) u1)
+    (= (upper-bound e2) u2)
+) (
+    (set (upper-bound e) (+ u1 u2))
+))
+
+(rule (
+    (= e (Add e1 e2))
+    (= (lower-bound e1) l1)
+    (= (lower-bound e2) l2)
+) (
+    (set (lower-bound e) (+ l1 l2))
+))
+```
+
+```elixir
+egglog = """
+(rule (
+    (= e (Add e1 e2))
+    (= (upper-bound e1) u1)
+    (= (upper-bound e2) u2)
+) (
+    (set (upper-bound e) (+ u1 u2))
+))
+
+(rule (
+    (= e (Add e1 e2))
+    (= (lower-bound e1) l1)
+    (= (lower-bound e2) l2)
+) (
+    (set (lower-bound e) (+ l1 l2))
+))
+"""
+
+{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+Tutorial.print_outputs(result, egglog)
+```
+
+... and the giant rule for multiplication:
+
+```egglog
+(rule (
+    (= e (Mul e1 e2))
+    (= le1 (lower-bound e1))
+    (= le2 (lower-bound e2))
+    (= ue1 (upper-bound e1))
+    (= ue2 (upper-bound e2))
+) (
+    (set (lower-bound e)
+         (min (* le1 le2)
+              (min (* le1 ue2)
+              (min (* ue1 le2)
+                   (* ue1 ue2)))))
+    (set (upper-bound e)
+         (max (* le1 le2)
+              (max (* le1 ue2)
+              (max (* ue1 le2)
+                   (* ue1 ue2)))))))
+```
+
+```elixir
+egglog = """
+(rule (
+    (= e (Mul e1 e2))
+    (= le1 (lower-bound e1))
+    (= le2 (lower-bound e2))
+    (= ue1 (upper-bound e1))
+    (= ue2 (upper-bound e2))
+) (
+    (set (lower-bound e)
+         (min (* le1 le2)
+              (min (* le1 ue2)
+              (min (* ue1 le2)
+                   (* ue1 ue2)))))
+    (set (upper-bound e)
+         (max (* le1 le2)
+              (max (* le1 ue2)
+              (max (* ue1 le2)
+                   (* ue1 ue2)))))))
+"""
+
+{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+Tutorial.print_outputs(result, egglog)
+```
+
+Similarly,
+
+```egglog
+(rule (
+    (= e (Mul x x))
+) (
+    (set (lower-bound e) zero)
+))
+```
+
+```elixir
+egglog = """
+(rule (
+    (= e (Mul x x))
+) (
+    (set (lower-bound e) zero)
+))
+"""
+
+{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+Tutorial.print_outputs(result, egglog)
+```
+
+The interval analysis is not only useful for numerical tools like [Herbie](https://herbie.uwplse.org/),
+ but it can also guard certain optimization rules, making EqSat-based rewriting more powerful!
+
+For example, we are interested in non-zero expressions
+
+```egglog
+(relation non-zero (Expr))
+(rule ((< (upper-bound e) zero)) ((non-zero e)))
+(rule ((> (lower-bound e) zero)) ((non-zero e)))
+(rewrite (Div x x)         (Num one) :when ((non-zero x)))
+(rewrite (Mul x (Div y x)) y         :when ((non-zero x)))
+```
+
+```elixir
+egglog = """
+(relation non-zero (Expr))
+(rule ((< (upper-bound e) zero)) ((non-zero e)))
+(rule ((> (lower-bound e) zero)) ((non-zero e)))
+(rewrite (Div x x)         (Num one) :when ((non-zero x)))
+(rewrite (Mul x (Div y x)) y         :when ((non-zero x)))
+"""
+
+{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+Tutorial.print_outputs(result, egglog)
+```
+
+This non-zero analysis lets us optimize expressions that contain division safely.
+
+```egglog
+; 2 * (x / (1 + 2 / 2)) is equivalent to x
+(let expr3 (Mul (Num two) (Div (Var "x") (Add (Num one) (Div (Num two) (Num two))))))
+(let expr4 (Var "x"))
+(fail (check (= expr3 expr4)))
+(run-schedule (saturate (run)))
+(check (= expr3 expr4))
+
+; (x + 1)^2 + 2
+(let expr5 (Add (Mul (Add (Var "x") (Num one)) (Add (Var "x") (Num one))) (Num two)))
+(let expr6 (Div expr5 expr5))
+(run-schedule (saturate (run)))
+(check (= expr6 (Num one)))
+```
+
+```elixir
+egglog = """
+(let expr3 (Mul (Num two) (Div (Var "x") (Add (Num one) (Div (Num two) (Num two))))))
+(let expr4 (Var "x"))
+(fail (check (= expr3 expr4)))
+(run-schedule (saturate (run)))
+(check (= expr3 expr4))
+
+(let expr5 (Add (Mul (Add (Var "x") (Num one)) (Add (Var "x") (Num one))) (Num two)))
+(let expr6 (Div expr5 expr5))
+(run-schedule (saturate (run)))
+(check (= expr6 (Num one)))
+"""
+
+{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+Tutorial.print_outputs(result, egglog)
+```
+
+The guarded rewrites only fire after the interval analysis derives `non-zero` facts. This snapshot shows the analysis relations and the simplified representatives in the same serialized e-graph.
+
+```elixir
+Tutorial.summarize_egraph(egraph)
+```
+
+```elixir
+Egglog.EGraph.snapshot!(egraph)
+|> Tutorial.render_snapshot()
+```
+
+**Debugging tips!**
+
+`print-size` is used to print the size of a table. If the table name is omitted, it prints the size of every table.
+ This is useful for debugging performance, by seeing how the table sizes evolve as the iteration count increases.
+
+```egglog
+(print-size leq)
+(print-size)
+```
+
+```elixir
+egglog = """
+(print-size leq)
+(print-size)
+"""
+
+{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+Tutorial.print_outputs(result, egglog)
+```
+
+`print-function` extracts every instance of a constructor, function, or relation in the e-graph.
+ It takes the maximum number of instances to extract as a second argument, so as not to spend time
+ printing millions of rows. `print-function` is particularly useful when debugging small e-graphs.
+
+```egglog
+(print-function leq 15)
+```
+
+```elixir
+egglog = """
+(print-function leq 15)
+"""
+
+{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+Tutorial.print_outputs(result, egglog)
+```
+
+`extract` can also take a second argument, which causes it to extract that many different "variants" of the
+ first argument. This is useful when trying to figure out why one e-class is failing to be unioned with another.
+
+```egglog
+(extract expr3 3)
+```
+
+```elixir
+egglog = """
+(extract expr3 3)
+"""
+
+{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+Tutorial.print_outputs(result, egglog)
+```
+
+**Exercises:**
+
+**(Free variable analysis)**
+ One analysis that is frequently useful is free variable sets. While it is possible to simulate "sets" using
+ only functions, egglog provides _containers_ to make this less tedious and more efficient. A container
+ is essentially a value that can store other values; some examples are `Set`, `Map`, and `Vec`.
+ However, before we can construct a container, we have to tell `egglog` what sort to use inside
+ the container. This is done with an overload of the `sort` command.
+
+```
+ (sort FreeVarSet (Set String))
+```
+
+Now, we can construct sets with `set-of`.
+
+```
+ (extract (set-of "1" "1"))
+```
+
+We will need a function to store the results of our free variable analysis. We have to use set intersection
+ for the merge function, because of rewrites like `x / x => 1`.
+
+```
+ (function FreeVars (Expr) FreeVarSet :merge (set-intersect old new))
+```
+
+Finally, we will need you to write the rules for the free variable analysis. You should have one rule for
+ every variant of `Expr`. Here's an example rule for `Add`:
+
+```
+  (rule (
+      (= e (Add a b))
+      (= f (FreeVars a))
+      (= g (FreeVars b))
+  ) (
+      (set (FreeVars e) (set-union f g))
+  ))
+```
+
+If everything worked, `expr5` should only have `"x"` as a free variable.
+
+```
+ (run-schedule (saturate (run)))
+ (extract (FreeVars expr3))
+```

@@ -1,0 +1,324 @@
+# Extraction and Cost
+
+## Intro
+
+These notebooks are Livebook adaptations of the upstream egglog tutorial from https://egraphs-good.github.io/egglog-tutorial/. The egglog examples follow the upstream chapter order closely; the extra Elixir cells are there to make normally silent egglog state visible in Livebook.
+
+Each executable egglog block is sent directly to one live mutable `Egglog.EGraph` session. The helper below is only for displaying outputs and snapshots; the cells that change the e-graph call `Egglog.EGraph.run/3` themselves.
+
+When using the published package, replace the dependency with `{:egglog_elixir, "~> 0.1"}`.
+
+```elixir
+Mix.install([
+  {:egglog_elixir, path: Path.expand("../..", __DIR__)},
+  {:kino, "~> 0.19.0"}
+])
+```
+
+```elixir
+defmodule Tutorial do
+  def print_outputs(result, code \\ "") do
+    (result.outputs ++ check_outputs(code))
+    |> Enum.map(& &1.text)
+    |> Enum.reject(&is_nil/1)
+    |> Enum.map(&String.trim_trailing/1)
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.each(&IO.puts/1)
+  end
+
+  def render_snapshot(%{format: :svg, svg: svg}) when is_binary(svg) do
+    kino_html = Module.concat(Kino, HTML)
+
+    if Code.ensure_loaded?(kino_html) do
+      apply(kino_html, :new, [svg])
+    else
+      svg
+    end
+  end
+
+  def render_snapshot(%{text: text}), do: text
+
+  def summarize_egraph(egraph, opts \\ []) do
+    summary =
+      egraph
+      |> json_snapshot(opts)
+      |> Egglog.Snapshot.summary()
+
+    %{
+      e_nodes: summary.nodes,
+      e_classes: summary.classes,
+      by_operator: summary.operators,
+      omitted: summary.omitted
+    }
+  end
+
+  defp json_snapshot(egraph, opts) do
+    Egglog.EGraph.snapshot!(egraph, Keyword.merge([render: :json], opts))
+  end
+
+  defp check_outputs(code) do
+    code
+    |> String.split("\n")
+    |> Enum.map(&String.trim/1)
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.filter(&String.contains?(&1, "(check "))
+    |> Enum.map(fn line ->
+      text =
+        if String.starts_with?(line, "(fail ") do
+          "expected failure observed: #{line}"
+        else
+          "check succeeded: #{line}"
+        end
+
+      %{type: :check_success, text: text <> "\n"}
+    end)
+  end
+end
+
+{:ok, egraph} = Egglog.EGraph.new()
+```
+
+> Scope note: the first half of this chapter runs through the wrapper and
+> covers ordinary extraction plus constructor `:cost` annotations. The later
+> dynamic-cost section uses experimental/native extension features:
+> `with-dynamic-cost`, `set-cost`, and `DynamicCostModel`. Those blocks are
+> preserved as reference text rather than executed by the thin wrapper.
+
+## Extraction and Cost
+
+After saturation, an e-class may represent many equivalent terms. Extraction is the step that chooses one representative term for downstream use.
+
+Optimality needs to be defined with regard to some cost model.
+ A cost model is a function that assigns a cost to each term in the e-graph.
+ By default, `extract` uses AST size as its cost model and picks the term with the smallest cost.
+
+In this session, we first use the part supported by the thin wrapper: constructor costs with `:cost`. The later dynamic-cost material is preserved as reference text because it depends on experimental extension commands not accepted by the vendored parser.
+
+```egglog
+(push)
+```
+
+```elixir
+egglog = """
+(push)
+"""
+
+{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+Tutorial.print_outputs(result, egglog)
+```
+
+Here we have the same Expr language but annotated with `:cost` attributes.
+
+```egglog
+(datatype Expr
+  (Num i64)
+  (Var String)
+  (Add Expr Expr :cost 2)
+  (Mul Expr Expr :cost 10)
+)
+```
+
+```elixir
+egglog = """
+(datatype Expr
+  (Num i64)
+  (Var String)
+  (Add Expr Expr :cost 2)
+  (Mul Expr Expr :cost 10)
+)
+"""
+
+{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+Tutorial.print_outputs(result, egglog)
+```
+
+The default cost of a datatype constructor is 1.
+ Intuitively, the additional `:cost` attributes mark the multiplication operation as more expensive than addition.
+
+Let's look at how cost is computed for a concrete term in the default tree cost model.
+
+```egglog
+; expr = x * 2 + 1
+(let expr (Add (Mul (Var "x") (Num 2)) (Num 1)))
+```
+
+```elixir
+egglog = """
+(let expr (Add (Mul (Var "x") (Num 2)) (Num 1)))
+"""
+
+{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+Tutorial.print_outputs(result, egglog)
+```
+
+This term has a total cost of 18 because
+
+```
+ (Add               \\ cost = 2  (from Add) + 14 (from left operand) + 2 (from right operand) = 18
+     (Mul           \\ cost = 10 (from Mul) + 2  (from left operand) + 2 (from right operand) = 14
+         (Var "x")  \\ cost = 1  (from Var) + 1  (from "x") = 2
+         (Num 2)    \\ cost = 1  (from Num) + 1  (from 2)   = 2
+     )
+     (Num 1)        \\ cost = 1  (from Num) + 1  (from 1)   = 2
+ )
+```
+
+We can use the `extract` command to extract the lowest cost variant of the term.
+ For now it gives the only version that we just defined
+
+```egglog
+(extract expr)
+```
+
+```elixir
+egglog = """
+(extract expr)
+"""
+
+{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+Tutorial.print_outputs(result, egglog)
+```
+
+Let's introduces more variants with rewrites
+
+```egglog
+(rewrite (Mul x (Num 2)) (Add x x))
+
+(run 1)
+
+(extract expr)
+```
+
+```elixir
+egglog = """
+(rewrite (Mul x (Num 2)) (Add x x))
+
+(run 1)
+
+(extract expr)
+"""
+
+{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+Tutorial.print_outputs(result, egglog)
+```
+
+The graph now contains both the original multiplication form and the expanded addition form. Extraction chooses the cheaper representative according to constructor costs, but the e-graph keeps both equivalent nodes.
+
+```elixir
+Tutorial.summarize_egraph(egraph)
+```
+
+```elixir
+Egglog.EGraph.snapshot!(egraph)
+|> Tutorial.render_snapshot()
+```
+
+It now extracts the lower cost variant that corresponds to `x + x + 1`, which is equivalent to the original term.
+ If there are multiple variants of the same lowest cost, `extract` break ties arbitrarily.
+
+```egglog
+(pop)
+```
+
+```elixir
+egglog = """
+(pop)
+"""
+
+{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+Tutorial.print_outputs(result, egglog)
+```
+
+**Setting custom cost for e-nodes**
+
+The `:cost` attribute sets an uniform additional cost to each appearance of corresponding constructor.
+ However, this is not expressive enough to cover the case where additional cost of an operation is not a fixed constant.
+ We can use the `set-cost` feature provided by `egglog-experimental` to get more fine-grained control of individual e-node's cost.
+
+The matrix example below is therefore conceptual in this Livebook: it shows what the upstream tutorial is teaching, but the cells are intentionally not executed through the thin wrapper.
+
+To show how this feature works, we define a toy language of matrices.
+
+`with-dynamic-cost` enables this feature for the constructors defined inside
+
+```egglog
+(with-dynamic-cost 
+    (datatype Matrix
+        ; A matrix constant with fixed size
+        (MConst i64 i64)
+        ; Matrix multiplication
+        (MMul Matrix Matrix)
+    )
+)
+```
+
+> This block is reference code in this Livebook clone. It uses egglog functionality outside the thin Elixir wrapper path exercised here.
+
+We also define two analyses for the number of rows and columns
+
+```egglog
+(function row (Matrix) i64 :no-merge)
+(function col (Matrix) i64 :no-merge)
+
+(rule (
+    (= x (MConst r c))
+) (
+    (set (row x) r)
+    (set (col x) c)
+))
+
+(rule (
+    (= x (MMul y z))
+    (= r (row y))
+    (= (col y) (row z))
+    (= c (col z))
+) (
+    (set (row x) r)
+    (set (col x) c)
+))
+```
+
+> This block is reference code in this Livebook clone. It uses egglog functionality outside the thin Elixir wrapper path exercised here.
+
+Now we define the cost of matrix multiplication as a product of the dimensions
+
+```egglog
+(rule (
+    (MMul y z)
+    (= r (row y))
+    (= m (col y))
+    (= c (col z))
+) (
+    (set-cost (MMul y z) (* r (* m c)))
+))
+```
+
+> This block is reference code in this Livebook clone. It uses egglog functionality outside the thin Elixir wrapper path exercised here.
+
+Let's optimize matrix multiplication with this cost model
+
+```egglog
+(birewrite (MMul x (MMul y z)) (MMul (MMul x y) z))
+
+(let Mexpr (MMul (MMul (MConst 64 8) (MConst 8 256)) (MConst 256 2)))
+
+(run 5)
+```
+
+> This block is reference code in this Livebook clone. It uses egglog functionality outside the thin Elixir wrapper path exercised here.
+
+Thanks to our cost model, egglog is able to extract the equivalent program with lowest cost using the dimension information we provided:
+
+```egglog
+; (MMul (MConst 64 8) (MMul (MConst 8 256) (MConst 256 2)))
+(extract Mexpr)
+```
+
+> This block is reference code in this Livebook clone. It uses egglog functionality outside the thin Elixir wrapper path exercised here.
+
+For advanced users who want to further customize the cost model, it is possible to use define your own cost model in Rust
+ using the interface egglog provides.
+ Indeed, the `set-cost` feature demonstrated here is implemented outside of the core egglog codebase and
+  uses the extensible cost model interface.
+
+We will show how to implement a simple cost model in Rust later.
