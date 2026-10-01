@@ -4,7 +4,7 @@ defmodule EgglogElixir.MixProject do
   def project do
     [
       app: :egglog_elixir,
-      version: "0.1.0",
+      version: "0.2.0",
       elixir: "~> 1.19",
       name: "EgglogElixir",
       description: "Thin Elixir wrapper around the native Rust egglog engine.",

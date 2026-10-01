@@ -17,62 +17,8 @@ Mix.install([
 
 ```elixir
 defmodule Tutorial do
-  def print_outputs(result, code \\ "") do
-    (result.outputs ++ check_outputs(code))
-    |> Enum.map(& &1.text)
-    |> Enum.reject(&is_nil/1)
-    |> Enum.map(&String.trim_trailing/1)
-    |> Enum.reject(&(&1 == ""))
-    |> Enum.each(&IO.puts/1)
-  end
-
-  def render_snapshot(%{format: :svg, svg: svg}) when is_binary(svg) do
-    kino_html = Module.concat(Kino, HTML)
-
-    if Code.ensure_loaded?(kino_html) do
-      apply(kino_html, :new, [svg])
-    else
-      svg
-    end
-  end
-
+  def render_snapshot(%{format: :svg, svg: svg}), do: Kino.HTML.new(svg)
   def render_snapshot(%{text: text}), do: text
-
-  def summarize_egraph(egraph, opts \\ []) do
-    summary =
-      egraph
-      |> json_snapshot(opts)
-      |> Egglog.Snapshot.summary()
-
-    %{
-      e_nodes: summary.nodes,
-      e_classes: summary.classes,
-      by_operator: summary.operators,
-      omitted: summary.omitted
-    }
-  end
-
-  defp json_snapshot(egraph, opts) do
-    Egglog.EGraph.snapshot!(egraph, Keyword.merge([render: :json], opts))
-  end
-
-  defp check_outputs(code) do
-    code
-    |> String.split("\n")
-    |> Enum.map(&String.trim/1)
-    |> Enum.reject(&(&1 == ""))
-    |> Enum.filter(&String.contains?(&1, "(check "))
-    |> Enum.map(fn line ->
-      text =
-        if String.starts_with?(line, "(fail ") do
-          "expected failure observed: #{line}"
-        else
-          "check succeeded: #{line}"
-        end
-
-      %{type: :check_success, text: text <> "\n"}
-    end)
-  end
 end
 
 {:ok, egraph} = Egglog.EGraph.new()

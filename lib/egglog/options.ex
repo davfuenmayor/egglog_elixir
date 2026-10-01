@@ -9,7 +9,7 @@ defmodule Egglog.Options do
     :snapshot_split_primitive_outputs
   ]
   @run @snapshot ++ [:output_limit]
-  @artifacts [:render, :path, :dot_path, :svg_path, :json_path]
+  @artifacts [:render, :render_timeout, :path, :dot_path, :svg_path, :json_path]
   @input [
            :source,
            :program,
@@ -24,15 +24,16 @@ defmodule Egglog.Options do
            :budget
          ] ++ @snapshot
   @profiles %{
-    graph_load: [:name, :proofs],
-    program_load: [:name, :proofs, :modes, :default_budget],
+    graph_load: [:name, :proofs, :num_threads],
+    program_load: [:name, :proofs, :modes, :default_budget, :num_threads],
     graph_run: @run,
     program_run: @run ++ [:mode, :budget],
     graph_snapshot: @run ++ @artifacts,
     program_snapshot: @run ++ @artifacts ++ [:mode, :budget],
     graph_extract: @run ++ [:variants],
     program_extract: @run ++ [:variants, :mode, :budget],
-    program_query: [:mode, :budget]
+    program_query: [:mode, :budget],
+    thread_settings: [:num_threads]
   }
 
   def with_options(opts, profile, fun) do
@@ -84,6 +85,7 @@ defmodule Egglog.Options do
 
   defp normalize(key, value)
        when key in [
+              :num_threads,
               :rounds,
               :snapshot_max_functions,
               :snapshot_max_calls_per_function,
@@ -92,7 +94,15 @@ defmodule Egglog.Options do
        do: count(value, 0)
 
   defp normalize(:output_limit, nil), do: {:ok, nil}
-  defp normalize(key, value) when key in [:output_limit, :variants, :count], do: count(value, 1)
+
+  defp normalize(:render_timeout, value) do
+    with {:ok, milliseconds} <- count(value, 1) do
+      if milliseconds <= 4_294_967_295, do: {:ok, milliseconds}, else: :error
+    end
+  end
+
+  defp normalize(key, value) when key in [:output_limit, :variants, :count],
+    do: count(value, 1)
 
   defp normalize(:snapshot, value)
        when value in [nil, false, true, :none, :dot, :json, "none", "dot", "json"],

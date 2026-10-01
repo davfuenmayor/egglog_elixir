@@ -45,9 +45,10 @@ fn parse_program<'a>(env: Env<'a>, source: String) -> Term<'a> {
 }
 
 #[rustler::nif(schedule = "DirtyCpu")]
-fn load_program<'a>(env: Env<'a>, source: String, proofs: bool) -> Term<'a> {
+fn load_program<'a>(env: Env<'a>, source: String, proofs: bool, num_threads: usize) -> Term<'a> {
     respond(env, || {
-        let egraph = resources::load_egraph(&source, proofs).map_err(NativeError::InvalidTheory)?;
+        let egraph = resources::load_egraph(&source, proofs, num_threads)
+            .map_err(NativeError::InvalidTheory)?;
         let inner = ProgramInner { base: egraph };
         let resource = ResourceArc::new(ProgramResource {
             inner: Mutex::new(Some(inner)),
@@ -57,9 +58,10 @@ fn load_program<'a>(env: Env<'a>, source: String, proofs: bool) -> Term<'a> {
 }
 
 #[rustler::nif(schedule = "DirtyCpu")]
-fn new_egraph<'a>(env: Env<'a>, source: String, proofs: bool) -> Term<'a> {
+fn new_egraph<'a>(env: Env<'a>, source: String, proofs: bool, num_threads: usize) -> Term<'a> {
     respond(env, || {
-        let egraph = resources::load_egraph(&source, proofs).map_err(NativeError::InvalidTheory)?;
+        let egraph = resources::load_egraph(&source, proofs, num_threads)
+            .map_err(NativeError::InvalidTheory)?;
         let resource = ResourceArc::new(EGraphResource {
             inner: Mutex::new(Some(egraph)),
         });
@@ -253,6 +255,124 @@ fn egraph_num_tuples<'a>(env: Env<'a>, egraph: ResourceArc<EGraphResource>) -> T
             Ok((atoms::ok(), egraph.num_tuples() as i64))
         })?;
         Ok(count)
+    })
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn functions_program<'a>(env: Env<'a>, program: ResourceArc<ProgramResource>) -> Term<'a> {
+    respond(env, || {
+        resources::with_program(&program, |inner| {
+            Ok((atoms::ok(), inspect::functions(&inner.base)))
+        })
+    })
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn functions_egraph<'a>(env: Env<'a>, graph: ResourceArc<EGraphResource>) -> Term<'a> {
+    respond(env, || {
+        resources::with_egraph(&graph, |graph| Ok((atoms::ok(), inspect::functions(graph))))
+    })
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn function_program<'a>(
+    env: Env<'a>,
+    program: ResourceArc<ProgramResource>,
+    name: String,
+) -> Term<'a> {
+    respond(env, || {
+        resources::with_program(&program, |inner| {
+            Ok((
+                atoms::ok(),
+                inner.base.get_function(&name).map(inspect::function_info),
+            ))
+        })
+    })
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn function_egraph<'a>(env: Env<'a>, graph: ResourceArc<EGraphResource>, name: String) -> Term<'a> {
+    respond(env, || {
+        resources::with_egraph(&graph, |graph| {
+            Ok((
+                atoms::ok(),
+                graph.get_function(&name).map(inspect::function_info),
+            ))
+        })
+    })
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn clear_function_egraph<'a>(
+    env: Env<'a>,
+    graph: ResourceArc<EGraphResource>,
+    name: String,
+) -> Term<'a> {
+    respond(env, || {
+        resources::with_egraph_mut(&graph, |graph| {
+            graph.clear_function(&name)?;
+            Ok(atoms::ok())
+        })
+    })
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn query_egraph<'a>(
+    env: Env<'a>,
+    graph: ResourceArc<EGraphResource>,
+    vars: Vec<(String, String)>,
+    facts: Vec<String>,
+) -> Term<'a> {
+    respond(env, || {
+        resources::with_egraph_mut(&graph, |graph| {
+            Ok((atoms::ok(), inspect::query(graph, vars, facts)?))
+        })
+    })
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn query_program<'a>(
+    env: Env<'a>,
+    program: ResourceArc<ProgramResource>,
+    source: String,
+    vars: Vec<(String, String)>,
+    facts: Vec<String>,
+) -> Term<'a> {
+    respond(env, || {
+        resources::with_cloned_program(&program, |graph| {
+            run_input(graph, &source)?;
+            Ok((atoms::ok(), inspect::query(graph, vars, facts)?))
+        })
+    })
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn program_num_threads<'a>(env: Env<'a>, program: ResourceArc<ProgramResource>) -> Term<'a> {
+    respond(env, || {
+        resources::with_program(&program, |inner| {
+            Ok((atoms::ok(), inner.base.num_threads()))
+        })
+    })
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn egraph_num_threads<'a>(env: Env<'a>, graph: ResourceArc<EGraphResource>) -> Term<'a> {
+    respond(env, || {
+        resources::with_egraph(&graph, |graph| Ok((atoms::ok(), graph.num_threads())))
+    })
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn set_egraph_num_threads<'a>(
+    env: Env<'a>,
+    graph: ResourceArc<EGraphResource>,
+    count: usize,
+) -> Term<'a> {
+    respond(env, || {
+        resources::with_egraph_mut(&graph, |graph| {
+            graph.set_num_threads(count);
+            Ok(atoms::ok())
+        })
     })
 }
 

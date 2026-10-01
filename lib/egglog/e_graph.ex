@@ -24,7 +24,8 @@ defmodule Egglog.EGraph do
   Failed native commands can leave earlier changes in place; the wrapper does
   not add transactions. Use native `push/2` and `pop/2` for rollback points.
   A caught panic discards the mutable graph and stops the server. Further calls
-  return `{:error, {:closed, message}}`. Validation errors occur before execution.
+  return `{:error, {:closed, message}}`. Unexpected server exits retain their
+  reason as `{:error, {:session_exit, reason}}`. Validation errors occur before execution.
   Run outputs and decoded values have the same shapes as `Egglog.Program`.
 
   `push/2` and `pop/2` delegate to native egglog's `(push)` and `(pop)`
@@ -63,6 +64,12 @@ defmodule Egglog.EGraph do
         `{:error, {:graphviz_missing, message}}` if `dot` is unavailable.
       * `:dot`, `"dot"`, `false`, or `nil` - return Graphviz DOT text.
       * `:json` or `"json"` - return egglog's native JSON snapshot.
+
+    * `:render_timeout` - positive Graphviz time limit in milliseconds; defaults
+      to `30_000`. Expiration terminates the renderer and returns
+      `{:error, {:graphviz_timeout, milliseconds}}`, including in `:auto` mode.
+      Native execution and session state are unaffected. DOT/JSON output does
+      not invoke Graphviz.
 
     * `:snapshot_max_functions` - value passed to native egglog's
       `SerializeConfig.max_functions`. Defaults to `0`. Values greater than
@@ -220,6 +227,9 @@ defmodule Egglog.EGraph do
 
   Options:
 
+    * `:num_threads` - native worker threads for this graph. Defaults to `1`
+      (serial); `0` uses available parallelism. Other graphs are unaffected.
+
     * `:name` - human-readable session name stored in the returned struct.
       Defaults to `nil`; it is not passed to native egglog.
 
@@ -233,7 +243,13 @@ defmodule Egglog.EGraph do
     Options.with_options(opts, :graph_load, fn opts ->
       proofs? = Common.get(opts, :proofs, false)
 
-      with {:ok, pid} <- Server.start(source: source, proofs?: proofs?, owner: self()) do
+      with {:ok, pid} <-
+             Server.start(
+               source: source,
+               proofs?: proofs?,
+               num_threads: Common.get(opts, :num_threads, 1),
+               owner: self()
+             ) do
         {:ok, %__MODULE__{pid: pid, name: Common.get(opts, :name)}}
       end
     end)
@@ -376,7 +392,7 @@ defmodule Egglog.EGraph do
   end
 
   @doc """
-  Looks up a function row after evaluating the given argument expressions.
+  Looks up a function or constructor row after evaluating its argument expressions.
 
   Returns `{:ok, nil}` when no row exists for the evaluated key.
   """
@@ -443,6 +459,80 @@ defmodule Egglog.EGraph do
     egraph
     |> snapshot(opts)
     |> Common.bang("failed to snapshot egglog e-graph")
+  end
+
+  @doc """
+  Lists all native function and constructor declarations in registration order.
+
+  Each map contains `:name`, input sort names in `:input`, the `:output` sort,
+  `:subtype` (`:function` or `:constructor`), and native `:hidden`, `:let_binding`
+  and `:can_subsume` flags. Hidden compiler declarations are included.
+  """
+  def functions(%__MODULE__{pid: pid}), do: Server.call(pid, :functions)
+
+  @doc "Bang variant of `functions/1`."
+  def functions!(graph), do: functions(graph) |> Common.bang("failed to inspect egglog functions")
+
+  @doc "Returns the native declaration map described by `functions/1`, or `{:ok, nil}` for an unknown name."
+  def function(%__MODULE__{pid: pid}, name) when is_binary(name),
+    do: Server.call(pid, {:function, name})
+
+  @doc "Bang variant of `function/2`; an unknown name returns `nil`."
+  def function!(graph, name),
+    do: function(graph, name) |> Common.bang("failed to inspect egglog function")
+
+  @doc """
+  Removes all rows of a native table, preserving its declaration. Returns `:ok`.
+
+  Delegates to upstream `clear_function`; it accepts function and constructor
+  names. An unknown name returns a native error. This mutates the graph and
+  follows native `push`/`pop` rollback behavior.
+  """
+  def clear_function(%__MODULE__{pid: pid}, name) when is_binary(name),
+    do: Server.call(pid, {:clear_function, name})
+
+  @doc "Bang variant of `clear_function/2`."
+  def clear_function!(graph, name) do
+    case clear_function(graph, name) do
+      :ok -> :ok
+      {:error, reason} -> raise "failed to clear egglog function: #{inspect(reason)}"
+    end
+  end
+
+  @doc """
+  Runs upstream's native pattern query and returns `{:ok, binding_maps}`.
+
+  `vars` names each requested variable and its sort, e.g. `[x: "i64"]` or
+  `[{"x", "i64"}]`; `facts` is a list of native fact strings such as `["(R x)"]`.
+  Each match maps string variable names to the same typed value maps as `eval/2`.
+  Row order is unspecified. No matches returns `[]`; a matching ground query
+  with no variables returns `[%{}]`.
+
+  This delegates parsing, typechecking and matching to Rust. Upstream currently
+  rejects pattern queries with proofs enabled; that native error is returned.
+  The native query adds and removes its temporary rule; it does not run your
+  persistent rules or undo earlier graph mutations.
+  """
+  def query(%__MODULE__{pid: pid}, vars, facts) do
+    with {:ok, vars, facts} <- Common.query_inputs(vars, facts),
+         do: Server.call(pid, {:query, vars, facts})
+  end
+
+  @doc "Bang variant of `query/3`."
+  def query!(graph, vars, facts),
+    do: query(graph, vars, facts) |> Common.bang("failed to query egglog")
+
+  @doc "Returns `{:ok, count}` for this graph's native worker-thread configuration."
+  def num_threads(%__MODULE__{pid: pid}), do: Server.call(pid, :num_threads)
+
+  @doc """
+  Changes this graph's native thread count. `1` runs serially; `0` chooses
+  available parallelism. Returns `:ok`. Other graphs are unaffected.
+  """
+  def set_num_threads(%__MODULE__{pid: pid}, count) do
+    Options.with_options([num_threads: count], :thread_settings, fn opts ->
+      Server.call(pid, {:set_num_threads, opts.num_threads})
+    end)
   end
 
   @doc """

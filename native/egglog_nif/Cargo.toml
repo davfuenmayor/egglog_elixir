@@ -1,6 +1,6 @@
 [package]
 name = "egglog_nif"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.91"
 license = "MIT"
@@ -10,6 +10,6 @@ publish = false
 crate-type = ["cdylib"]
 
 [dependencies]
-egglog = { git = "https://github.com/egraphs-good/egglog.git", rev = "f0da95b0611a7c0be28d89b17e05a11b4490c6b0", default-features = false, features = ["graphviz", "serde"] }
+egglog = { git = "https://github.com/egraphs-good/egglog.git", rev = "b912caa9694c0c029f9ae3d91db0adc8824e14f5", default-features = false, features = ["graphviz", "serde"] }
 rustler = "0.38.0"
 serde_json = "1.0"

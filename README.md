@@ -51,6 +51,12 @@ DOT, SVG, or JSON:
 
 `Egglog.Snapshot.summary/1` provides small JSON snapshot summaries for notebooks
 and tests. The wrapper itself has no Livebook or Kino dependency.
+`Egglog.Output.print/2` prints only text returned by native egglog.
+
+SVG rendering has a separate `render_timeout: 30_000` millisecond default.
+Expiration kills Graphviz and returns `{:error, {:graphviz_timeout, milliseconds}}`;
+it does not cancel or roll back native egglog execution. Use native snapshot
+limits to reduce diagrams, or `render: :dot` / `render: :json` to skip SVG layout.
 
 ## Concurrency
 
@@ -107,6 +113,10 @@ mix test
 For Livebook, the Livebook runtime also needs `cargo` on `PATH`. Graph
 visualizations additionally need Graphviz's `dot` executable on `PATH`.
 
+The wrapper targets egglog 3.0.0 at revision
+`b912caa9694c0c029f9ae3d91db0adc8824e14f5`. Native pattern queries, declaration
+inspection and per-graph thread configuration are documented in the public API.
+
 The NIF crate lives in `native/egglog_nif` and depends on the upstream Rust
 `egglog` crate by a pinned Git revision. It does not require a sibling checkout
 of the upstream egglog repository.
@@ -128,6 +138,13 @@ It writes an archive under `dist/` and updates `checksum-Elixir.Egglog.Native.ex
 review and ship the checksum with the matching release. It does not upload anything.
 Only the listed target has been verified; other platforms use source builds.
 
+For publication, commit the reviewed sources and checksum, tag the matching
+commit as `v0.2.0`, and push that commit/tag. Then run
+`MIX_ENV=prod mix run scripts/publish_native.exs` with authenticated GitHub CLI
+release access. The script verifies the clean tagged source and archive hashes,
+and refuses to replace an existing release. After publication, consumers can
+use the download configuration above without installing Rust.
+
 Deployed source-built releases do not need Cargo. The tested Linux artifact links
 against glibc (2.34+), libm and libgcc_s; Graphviz's `dot` is needed only for SVG rendering.
 DOT and JSON snapshots work without Graphviz. Native artifact archives include
@@ -147,3 +164,33 @@ Regenerate the local Cargo lockfile with `cargo update --manifest-path
 native/egglog_nif/Cargo.toml`, then rebuild from source. Upstream's path-based
 workspace dependencies follow that checkout. Restore the patch and lockfile
 before distributing; normal installations retain the pinned Git revision.
+
+### Livebook checks
+
+The checker uses the same real Livebook session method as `rudof_elixir`.
+Install the pinned Livebook version and start an isolated local server:
+
+```sh
+mix escript.install hex livebook 0.19.9 --force
+epmd -daemon
+LIVEBOOK_IFRAME_PORT=8192 ~/.mix/escripts/livebook server --ip 127.0.0.1 --port 8191 \
+  --name egglog_livebooks@127.0.0.1 --cookie YOUR_LOCAL_COOKIE
+```
+
+From the project root, in another terminal:
+
+```sh
+elixir --name egglog_checker@127.0.0.1 --cookie YOUR_LOCAL_COOKIE \
+  scripts/check_livebooks.exs egglog_livebooks@127.0.0.1
+```
+
+This evaluates every notebook under `livebooks/`, including Getting Started,
+using Livebook's parser, runtime, actual `Mix.install` cells and Kino. Graphviz
+must be installed to check SVG rendering. Import warnings and evaluation errors
+fail the check. Markdown-only examples stay Markdown; executable cells must be
+Elixir. Each session evaluates a disposable notebook copy, so autosaves cannot
+change your authoritative Livebooks, and closes afterward. The checker relies
+on Livebook internals, hence the pinned version. `mix test` additionally checks
+the setup dependency paths and wrapper examples without running a server.
+Append notebook paths such as `livebooks/getting_started.livemd` to the checker
+command to rerun selected files.

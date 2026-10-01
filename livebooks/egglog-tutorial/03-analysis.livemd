@@ -17,62 +17,8 @@ Mix.install([
 
 ```elixir
 defmodule Tutorial do
-  def print_outputs(result, code \\ "") do
-    (result.outputs ++ check_outputs(code))
-    |> Enum.map(& &1.text)
-    |> Enum.reject(&is_nil/1)
-    |> Enum.map(&String.trim_trailing/1)
-    |> Enum.reject(&(&1 == ""))
-    |> Enum.each(&IO.puts/1)
-  end
-
-  def render_snapshot(%{format: :svg, svg: svg}) when is_binary(svg) do
-    kino_html = Module.concat(Kino, HTML)
-
-    if Code.ensure_loaded?(kino_html) do
-      apply(kino_html, :new, [svg])
-    else
-      svg
-    end
-  end
-
+  def render_snapshot(%{format: :svg, svg: svg}), do: Kino.HTML.new(svg)
   def render_snapshot(%{text: text}), do: text
-
-  def summarize_egraph(egraph, opts \\ []) do
-    summary =
-      egraph
-      |> json_snapshot(opts)
-      |> Egglog.Snapshot.summary()
-
-    %{
-      e_nodes: summary.nodes,
-      e_classes: summary.classes,
-      by_operator: summary.operators,
-      omitted: summary.omitted
-    }
-  end
-
-  defp json_snapshot(egraph, opts) do
-    Egglog.EGraph.snapshot!(egraph, Keyword.merge([render: :json], opts))
-  end
-
-  defp check_outputs(code) do
-    code
-    |> String.split("\n")
-    |> Enum.map(&String.trim/1)
-    |> Enum.reject(&(&1 == ""))
-    |> Enum.filter(&String.contains?(&1, "(check "))
-    |> Enum.map(fn line ->
-      text =
-        if String.starts_with?(line, "(fail ") do
-          "expected failure observed: #{line}"
-        else
-          "check succeeded: #{line}"
-        end
-
-      %{type: :check_success, text: text <> "\n"}
-    end)
-  end
 end
 
 {:ok, egraph} = Egglog.EGraph.new()
@@ -117,7 +63,7 @@ egglog = """
 """
 
 {:ok, result} = Egglog.EGraph.run(egraph, egglog)
-Tutorial.print_outputs(result, egglog)
+Egglog.Output.print(result)
 ```
 
 Let's define some BigRat constants that will be useful later.
@@ -136,7 +82,7 @@ egglog = """
 """
 
 {:ok, result} = Egglog.EGraph.run(egraph, egglog)
-Tutorial.print_outputs(result, egglog)
+Egglog.Output.print(result)
 ```
 
 We define a less-than-or-equal-to relation between two expressions.
@@ -152,7 +98,7 @@ egglog = """
 """
 
 {:ok, result} = Egglog.EGraph.run(egraph, egglog)
-Tutorial.print_outputs(result, egglog)
+Egglog.Output.print(result)
 ```
 
 We define rules to deduce the `leq` relation. We start with transitivity of `leq`:
@@ -177,7 +123,7 @@ egglog = """
 """
 
 {:ok, result} = Egglog.EGraph.run(egraph, egglog)
-Tutorial.print_outputs(result, egglog)
+Egglog.Output.print(result)
 ```
 
 We can define a few axioms for deciding when one expression is less than or equal to another.
@@ -206,7 +152,7 @@ egglog = """
 """
 
 {:ok, result} = Egglog.EGraph.run(egraph, egglog)
-Tutorial.print_outputs(result, egglog)
+Egglog.Output.print(result)
 ```
 
 Base case for `leq` for `Var`:
@@ -229,7 +175,7 @@ egglog = """
 """
 
 {:ok, result} = Egglog.EGraph.run(egraph, egglog)
-Tutorial.print_outputs(result, egglog)
+Egglog.Output.print(result)
 ```
 
 Recursive case for `leq` for `Add`:
@@ -258,7 +204,7 @@ egglog = """
 """
 
 {:ok, result} = Egglog.EGraph.run(egraph, egglog)
-Tutorial.print_outputs(result, egglog)
+Egglog.Output.print(result)
 ```
 
 Note that we have not defined any rules for multiplication. This would require a more complex
@@ -293,7 +239,7 @@ egglog = """
 """
 
 {:ok, result} = Egglog.EGraph.run(egraph, egglog)
-Tutorial.print_outputs(result, egglog)
+Egglog.Output.print(result)
 ```
 
 To check our rules, we define two concrete expressions. Before saturation, the `leq` fact is intentionally absent. After saturation, the equality-saturation rules expose enough equivalent forms for the analysis rules to prove the inequality.
@@ -318,13 +264,14 @@ egglog = """
 """
 
 {:ok, result} = Egglog.EGraph.run(egraph, egglog)
-Tutorial.print_outputs(result, egglog)
+Egglog.Output.print(result)
 ```
 
 The visualization now contains both expression nodes and the `leq` relation facts that made the final check succeed. This is a good place to see analysis data living beside the equality structure.
 
 ```elixir
-Tutorial.summarize_egraph(egraph)
+Egglog.EGraph.snapshot!(egraph, render: :json)
+|> Egglog.Snapshot.summary()
 ```
 
 ```elixir
@@ -346,7 +293,7 @@ egglog = """
 """
 
 {:ok, result} = Egglog.EGraph.run(egraph, egglog)
-Tutorial.print_outputs(result, egglog)
+Egglog.Output.print(result)
 ```
 
 The merge expressions encode the lattice operation:
@@ -386,7 +333,7 @@ egglog = """
 """
 
 {:ok, result} = Egglog.EGraph.run(egraph, egglog)
-Tutorial.print_outputs(result, egglog)
+Egglog.Output.print(result)
 ```
 
 We can define more specific rules for obtaining the upper and lower bounds of an expression
@@ -430,7 +377,7 @@ egglog = """
 """
 
 {:ok, result} = Egglog.EGraph.run(egraph, egglog)
-Tutorial.print_outputs(result, egglog)
+Egglog.Output.print(result)
 ```
 
 ... and the giant rule for multiplication:
@@ -477,7 +424,7 @@ egglog = """
 """
 
 {:ok, result} = Egglog.EGraph.run(egraph, egglog)
-Tutorial.print_outputs(result, egglog)
+Egglog.Output.print(result)
 ```
 
 Similarly,
@@ -500,7 +447,7 @@ egglog = """
 """
 
 {:ok, result} = Egglog.EGraph.run(egraph, egglog)
-Tutorial.print_outputs(result, egglog)
+Egglog.Output.print(result)
 ```
 
 The interval analysis is not only useful for numerical tools like [Herbie](https://herbie.uwplse.org/),
@@ -526,7 +473,7 @@ egglog = """
 """
 
 {:ok, result} = Egglog.EGraph.run(egraph, egglog)
-Tutorial.print_outputs(result, egglog)
+Egglog.Output.print(result)
 ```
 
 This non-zero analysis lets us optimize expressions that contain division safely.
@@ -561,13 +508,14 @@ egglog = """
 """
 
 {:ok, result} = Egglog.EGraph.run(egraph, egglog)
-Tutorial.print_outputs(result, egglog)
+Egglog.Output.print(result)
 ```
 
 The guarded rewrites only fire after the interval analysis derives `non-zero` facts. This snapshot shows the analysis relations and the simplified representatives in the same serialized e-graph.
 
 ```elixir
-Tutorial.summarize_egraph(egraph)
+Egglog.EGraph.snapshot!(egraph, render: :json)
+|> Egglog.Snapshot.summary()
 ```
 
 ```elixir
@@ -592,7 +540,7 @@ egglog = """
 """
 
 {:ok, result} = Egglog.EGraph.run(egraph, egglog)
-Tutorial.print_outputs(result, egglog)
+Egglog.Output.print(result)
 ```
 
 `print-function` extracts every instance of a constructor, function, or relation in the e-graph.
@@ -609,7 +557,7 @@ egglog = """
 """
 
 {:ok, result} = Egglog.EGraph.run(egraph, egglog)
-Tutorial.print_outputs(result, egglog)
+Egglog.Output.print(result)
 ```
 
 `extract` can also take a second argument, which causes it to extract that many different "variants" of the
@@ -625,7 +573,7 @@ egglog = """
 """
 
 {:ok, result} = Egglog.EGraph.run(egraph, egglog)
-Tutorial.print_outputs(result, egglog)
+Egglog.Output.print(result)
 ```
 
 **Exercises:**

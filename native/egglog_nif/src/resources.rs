@@ -35,12 +35,14 @@ pub struct ParsedProgramResource {
 #[rustler::resource_impl]
 impl Resource for ParsedProgramResource {}
 
-pub fn load_egraph(source: &str, proofs: bool) -> Result<EGraph, String> {
+pub fn load_egraph(source: &str, proofs: bool, num_threads: usize) -> Result<EGraph, String> {
     let mut egraph = if proofs {
         EGraph::new_with_proofs()
     } else {
         EGraph::default()
     };
+
+    egraph.set_num_threads(num_threads);
 
     if !source.trim().is_empty() {
         egraph
@@ -62,52 +64,24 @@ fn with_cloned_base<T>(
     inner: &Mutex<Option<ProgramInner>>,
     fun: impl FnOnce(&mut EGraph) -> Result<T, NativeError>,
 ) -> Result<T, NativeError> {
-    let guard = inner
-        .lock()
-        .map_err(|_| NativeError::Closed("program is unavailable after a native panic".into()))?;
-    let inner = guard
-        .as_ref()
-        .ok_or_else(|| NativeError::Closed("program is closed".into()))?;
-    // Unwind inside the lock scope so errors do not poison the reusable base.
-    match catch_unwind(AssertUnwindSafe(|| {
-        let mut egraph = inner.base.clone();
-        fun(&mut egraph)
-    })) {
-        Ok(result) => result,
-        Err(payload) => Err(NativeError::Panic(crate::error::panic_payload_to_string(
-            payload,
-        ))),
-    }
+    with_guarded(inner, "program", |inner| {
+        let mut graph = inner.base.clone();
+        fun(&mut graph)
+    })
 }
 
 pub fn with_program<T>(
     program: &ResourceArc<ProgramResource>,
     fun: impl FnOnce(&ProgramInner) -> Result<T, NativeError>,
 ) -> Result<T, NativeError> {
-    let guard = program.inner.lock().map_err(|_| {
-        NativeError::Closed("program is unavailable after a native panic".to_string())
-    })?;
-
-    let inner = guard
-        .as_ref()
-        .ok_or_else(|| NativeError::Closed("program is closed".to_string()))?;
-
-    fun(inner)
+    with_guarded(&program.inner, "program", |inner| fun(inner))
 }
 
 pub fn with_egraph<T>(
     resource: &ResourceArc<EGraphResource>,
     fun: impl FnOnce(&EGraph) -> Result<T, NativeError>,
 ) -> Result<T, NativeError> {
-    let guard = resource.inner.lock().map_err(|_| {
-        NativeError::Closed("egraph is unavailable after a native panic".to_string())
-    })?;
-
-    let egraph = guard
-        .as_ref()
-        .ok_or_else(|| NativeError::Closed("egraph is closed".to_string()))?;
-
-    fun(egraph)
+    with_mutable_graph(&resource.inner, |graph| fun(graph))
 }
 
 pub fn with_egraph_mut<T>(
@@ -121,17 +95,24 @@ fn with_mutable_graph<T>(
     inner: &Mutex<Option<EGraph>>,
     fun: impl FnOnce(&mut EGraph) -> Result<T, NativeError>,
 ) -> Result<T, NativeError> {
-    let mut guard = inner.lock().map_err(|_| {
-        NativeError::Closed("egraph is unavailable after a native panic".to_string())
-    })?;
+    with_guarded(inner, "egraph", fun)
+}
 
-    let egraph = guard
+fn with_guarded<T, R>(
+    inner: &Mutex<Option<T>>,
+    kind: &str,
+    fun: impl FnOnce(&mut T) -> Result<R, NativeError>,
+) -> Result<R, NativeError> {
+    let mut guard = inner
+        .lock()
+        .map_err(|_| NativeError::Closed(format!("{kind} is unavailable after a native panic")))?;
+    let value = guard
         .as_mut()
-        .ok_or_else(|| NativeError::Closed("egraph is closed".to_string()))?;
-
-    // Catch while holding the guard so unwinding never poisons the mutex.
-    // A panicking mutable graph is discarded rather than reused.
-    match catch_unwind(AssertUnwindSafe(|| fun(egraph))) {
+        .ok_or_else(|| NativeError::Closed(format!("{kind} is closed")))?;
+    // Catch inside the guard: no poisoned mutex, and no reuse of possibly
+    // damaged state. This also discards a Program base after clone-local panics,
+    // since upstream clones share some internal state.
+    match catch_unwind(AssertUnwindSafe(|| fun(value))) {
         Ok(result) => result,
         Err(payload) => {
             guard.take();
@@ -171,15 +152,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn cloned_execution_panic_does_not_poison_the_base() {
+    fn cloned_execution_panic_discards_the_base_without_poisoning() {
         let inner = Mutex::new(Some(ProgramInner {
             base: EGraph::default(),
         }));
         let result = with_cloned_base::<()>(&inner, |_| panic!("clone-local test panic"));
         assert!(matches!(result, Err(NativeError::Panic(_))));
         assert!(!inner.is_poisoned());
-        assert!(inner.lock().unwrap().is_some());
-        assert!(with_cloned_base(&inner, |graph| Ok(graph.num_tuples())).is_ok());
+        assert!(inner.lock().unwrap().is_none());
+        assert!(matches!(
+            with_cloned_base(&inner, |graph| Ok(graph.num_tuples())),
+            Err(NativeError::Closed(_))
+        ));
     }
 
     #[test]

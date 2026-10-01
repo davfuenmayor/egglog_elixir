@@ -162,4 +162,18 @@ defmodule Egglog do
   Closes the loaded program.
   """
   defdelegate close(program), to: Program
+  @doc "Inspects the native base declarations. See `Egglog.Program.functions/1`."
+  defdelegate functions(program), to: Program
+  @doc "Bang variant of `functions/1`."
+  defdelegate functions!(program), to: Program
+  @doc "Inspects one base declaration. See `Egglog.Program.function/2`."
+  defdelegate function(program, name), to: Program
+  @doc "Bang variant of `function/2`."
+  defdelegate function!(program, name), to: Program
+  @doc "Runs a native pattern query on query-local input. See `Egglog.Program.query/5`."
+  defdelegate query(program, input, vars, facts, opts \\ []), to: Program
+  @doc "Bang variant of `query/5`."
+  defdelegate query!(program, input, vars, facts, opts \\ []), to: Program
+  @doc "Returns the native worker-thread configuration. See `Egglog.Program.num_threads/1`."
+  defdelegate num_threads(program), to: Program
 end

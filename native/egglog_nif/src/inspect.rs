@@ -1,5 +1,6 @@
 use egglog::{
-    EGraph, Value,
+    EGraph, RawValues, Read, Value,
+    ast::FunctionSubtype,
     sort::{F, Q, S, Z},
 };
 
@@ -23,11 +24,11 @@ pub fn lookup_function(
     name: &str,
     arg_exprs: Vec<String>,
 ) -> Result<Option<NativeValue>, NativeError> {
-    let (input_sort_names, output_sort_name) = {
+    let (input_sort_names, output_sort_name, subtype) = {
         let schema = egraph
             .get_function(name)
             .ok_or_else(|| NativeError::Native(format!("could not find function {name}")))?
-            .schema();
+            .func_type();
 
         let input_sort_names = schema
             .input
@@ -35,7 +36,11 @@ pub fn lookup_function(
             .map(|sort| sort.name().to_string())
             .collect::<Vec<_>>();
 
-        (input_sort_names, schema.output.name().to_string())
+        (
+            input_sort_names,
+            schema.output.name().to_string(),
+            schema.subtype,
+        )
     };
 
     if arg_exprs.len() != input_sort_names.len() {
@@ -67,9 +72,82 @@ pub fn lookup_function(
         key.push(value);
     }
 
-    Ok(egraph
-        .lookup_function(name, &key)
-        .map(|value| encode_value(egraph, &output_sort_name, value)))
+    let value = egraph.read(|state| match subtype {
+        FunctionSubtype::Custom => state.lookup(name, RawValues(key)),
+        FunctionSubtype::Constructor => state.eclass_of(name, RawValues(key)),
+    })?;
+    Ok(value.map(|value| encode_value(egraph, &output_sort_name, value)))
+}
+
+pub type NativeFunction = (String, Vec<String>, String, String, bool, bool, bool);
+
+pub fn function_info(function: &egglog::Function) -> NativeFunction {
+    let schema = function.func_type();
+    (
+        function.name().to_owned(),
+        schema
+            .input
+            .iter()
+            .map(|sort| sort.name().to_owned())
+            .collect(),
+        schema.output.name().to_owned(),
+        match schema.subtype {
+            FunctionSubtype::Custom => "function",
+            FunctionSubtype::Constructor => "constructor",
+        }
+        .to_owned(),
+        function.is_hidden(),
+        function.is_let_binding(),
+        function.can_subsume(),
+    )
+}
+
+pub fn functions(graph: &EGraph) -> Vec<NativeFunction> {
+    graph
+        .functions_iter()
+        .map(|(_, function)| function_info(function))
+        .collect()
+}
+
+pub type NativeBindings = Vec<Vec<(String, NativeValue)>>;
+
+pub fn query(
+    graph: &mut EGraph,
+    vars: Vec<(String, String)>,
+    facts: Vec<String>,
+) -> Result<NativeBindings, NativeError> {
+    let vars = vars
+        .into_iter()
+        .map(|(name, sort)| {
+            graph
+                .get_sort_by_name(&sort)
+                .cloned()
+                .map(|sort| (name, sort))
+                .ok_or_else(|| NativeError::Native(format!("unknown sort {sort}")))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let facts = facts
+        .into_iter()
+        .map(|fact| {
+            graph
+                .parser
+                .get_fact_from_string(None, &fact)
+                .map_err(|error| NativeError::Native(error.to_string()))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let bindings = vars
+        .iter()
+        .map(|(name, sort)| (name.as_str(), sort.clone()))
+        .collect::<Vec<_>>();
+    let rows = graph.query(&bindings, egglog::ast::Facts(facts))?;
+    Ok(rows
+        .into_iter()
+        .map(|row| {
+            vars.iter()
+                .map(|(name, sort)| (name.clone(), encode_value(graph, sort.name(), row[name])))
+                .collect()
+        })
+        .collect())
 }
 
 fn encode_value(egraph: &EGraph, sort: &str, value: Value) -> NativeValue {

@@ -19,9 +19,12 @@ defmodule Egglog.Program do
   and `:value`; primitive values are decoded, other native values remain text.
   Big integers and rationals retain their exact string representations.
 
+  A caught native panic closes the program; load a new handle to continue.
+  Ordinary native errors leave the base available.
+
   Invalid options return `{:error, {:invalid_option, message}}` before execution.
   Native errors retain their text. Failed checks use `:check_failed`; caught
-  panics use `:panic`. A panic in a query-local clone does not mutate the base.
+  panics use `:panic` and discard the loaded base.
   """
 
   alias Egglog.{Commands, Common, Native, Options}
@@ -36,6 +39,9 @@ defmodule Egglog.Program do
   `:program`.
 
   Supported options:
+
+    * `:num_threads` - native worker threads retained by each clone. Defaults
+      to `1` (serial); `0` uses available parallelism. Configure at load time.
 
     * `:name` - human-readable program name stored in the returned struct.
       Defaults to `nil`; it is not passed to native egglog.
@@ -227,6 +233,12 @@ defmodule Egglog.Program do
       * `:dot`, `"dot"`, `false`, or `nil` - return Graphviz DOT text.
       * `:json` or `"json"` - return egglog's native JSON snapshot.
 
+    * `:render_timeout` - positive Graphviz time limit in milliseconds; defaults
+      to `30_000`. Expiration terminates the renderer and returns
+      `{:error, {:graphviz_timeout, milliseconds}}`, including in `:auto` mode.
+      This bounds only SVG rendering, not native egglog execution. DOT/JSON
+      output does not invoke Graphviz.
+
       Internally, `:render` determines the native `:snapshot` format passed to
       `run/3`: `:json` requests JSON; every other render value requests DOT.
 
@@ -326,7 +338,11 @@ defmodule Egglog.Program do
 
       with {:ok, theory} <- Options.validate(theory, [:source, :program]),
            {:ok, ref} <-
-             Native.load_program(source_from(theory), Common.get(opts, :proofs, false))
+             Native.load_program(
+               source_from(theory),
+               Common.get(opts, :proofs, false),
+               Common.get(opts, :num_threads, 1)
+             )
              |> Common.from_native_load() do
         {:ok,
          %__MODULE__{
@@ -571,6 +587,47 @@ defmodule Egglog.Program do
     |> snapshot(input, opts)
     |> Common.bang("failed to snapshot egglog e-graph")
   end
+
+  @doc "Returns native declarations from the loaded base; see `Egglog.EGraph.functions/1` for map fields. Query-local declarations are not retained."
+  def functions(%__MODULE__{ref: ref}),
+    do: Native.functions_program(ref) |> Common.from_native_functions()
+
+  @doc "Bang variant of `functions/1`."
+  def functions!(program),
+    do: functions(program) |> Common.bang("failed to inspect egglog functions")
+
+  @doc "Returns a native base declaration map, or `{:ok, nil}` for an unknown name; see `Egglog.EGraph.function/2`."
+  def function(%__MODULE__{ref: ref}, name) when is_binary(name),
+    do: Native.function_program(ref, name) |> Common.from_native_function()
+
+  @doc "Bang variant of `function/2`."
+  def function!(program, name),
+    do: function(program, name) |> Common.bang("failed to inspect egglog function")
+
+  @doc """
+  Runs a native pattern query after applying query-local `input` to a clone.
+
+  See `Egglog.EGraph.query/3` for variable, fact and result shapes. Options are
+  the same `:mode` and `:budget` options as `eval/4`; schedules in `input` run
+  before matching. The loaded base is unchanged. Native proof incompatibility
+  is returned as an error.
+  """
+  def query(%__MODULE__{} = program, input, vars, facts, opts \\ []) do
+    Options.with_options(opts, :program_query, fn opts ->
+      with {:ok, vars, facts} <- Common.query_inputs(vars, facts),
+           {:ok, source} <- run_source(program, input, opts) do
+        Native.query_program(program.ref, source, vars, facts) |> Common.from_native_bindings()
+      end
+    end)
+  end
+
+  @doc "Bang variant of `query/5`."
+  def query!(program, input, vars, facts, opts \\ []),
+    do: query(program, input, vars, facts, opts) |> Common.bang("failed to query egglog")
+
+  @doc "Returns `{:ok, count}` for the loaded base's native thread configuration, retained by each clone."
+  def num_threads(%__MODULE__{ref: ref}),
+    do: Native.program_num_threads(ref) |> Common.from_native_count()
 
   @doc """
   Returns native egglog's tuple count for the loaded base program.

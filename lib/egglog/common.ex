@@ -1,7 +1,8 @@
 defmodule Egglog.Common do
   @moduledoc false
 
-  @snapshot_artifact_keys [:render, :path, :dot_path, :svg_path, :json_path]
+  @snapshot_artifact_keys [:path, :dot_path, :svg_path, :json_path]
+  @snapshot_render_keys [:render, :render_timeout]
 
   def from_native_load({:ok, ref}), do: {:ok, ref}
   def from_native_load({:error, reason, message}), do: {:error, {reason, message}}
@@ -39,8 +40,64 @@ defmodule Egglog.Common do
   def from_native_count({:ok, count}), do: {:ok, count}
   def from_native_count({:error, reason, message}), do: {:error, {reason, message}}
 
+  def from_native_functions({:ok, functions}), do: {:ok, Enum.map(functions, &function/1)}
+  def from_native_functions({:error, reason, message}), do: {:error, {reason, message}}
+  def from_native_function({:ok, nil}), do: {:ok, nil}
+  def from_native_function({:ok, function}), do: {:ok, function(function)}
+  def from_native_function({:error, reason, message}), do: {:error, {reason, message}}
+
+  def from_native_bindings({:ok, rows}) do
+    {:ok,
+     Enum.map(rows, fn row ->
+       Map.new(row, fn {name, {sort, kind, raw}} -> {name, value(sort, kind, raw)} end)
+     end)}
+  end
+
+  def from_native_bindings({:error, reason, message}), do: {:error, {reason, message}}
+
+  def query_inputs(vars, facts) when is_list(vars) and is_list(facts) do
+    valid_vars? =
+      Enum.all?(vars, fn
+        {name, sort} -> (is_atom(name) or is_binary(name)) and is_binary(sort)
+        _ -> false
+      end)
+
+    if valid_vars? and Enum.all?(facts, &is_binary/1) do
+      vars = Enum.map(vars, fn {name, sort} -> {to_string(name), sort} end)
+
+      if length(Enum.uniq_by(vars, &elem(&1, 0))) == length(vars),
+        do: {:ok, vars, facts},
+        else: {:error, {:invalid_option, "duplicate query variable"}}
+    else
+      {:error,
+       {:invalid_option,
+        "query variables must be name/sort pairs and facts must be source strings"}}
+    end
+  end
+
+  def query_inputs(_, _),
+    do: {:error, {:invalid_option, "query variables and facts must be lists"}}
+
+  defp function({name, input, output, subtype, hidden, let_binding, can_subsume}) do
+    %{
+      name: name,
+      input: input,
+      output: output,
+      subtype: if(subtype == "function", do: :function, else: :constructor),
+      hidden: hidden,
+      let_binding: let_binding,
+      can_subsume: can_subsume
+    }
+  end
+
   def snapshot_from_result(%{snapshot: native_snapshot, stats: stats} = result, opts, render) do
-    with {:ok, rendered} <- render_snapshot(native_snapshot.text, native_snapshot.format, render) do
+    with {:ok, rendered} <-
+           render_snapshot(
+             native_snapshot.text,
+             native_snapshot.format,
+             render,
+             get(opts, :render_timeout, 30_000)
+           ) do
       snapshot =
         %{
           format: rendered.format,
@@ -87,7 +144,7 @@ defmodule Egglog.Common do
 
     run_opts =
       opts
-      |> Map.drop(@snapshot_artifact_keys)
+      |> Map.drop(@snapshot_artifact_keys ++ @snapshot_render_keys)
       |> Map.put(:snapshot, native_snapshot_format(render))
 
     {render, run_opts}
@@ -187,19 +244,20 @@ defmodule Egglog.Common do
     Map.put(result, :snapshot, %{format: String.to_atom(format), text: text, omitted: omitted})
   end
 
-  defp render_snapshot(json, :json, render) when render in [:json, "json"] do
+  defp render_snapshot(json, :json, render, _timeout) when render in [:json, "json"] do
     {:ok, %{format: :json, text: json, json: json}}
   end
 
-  defp render_snapshot(text, format, _render) when format != :dot do
+  defp render_snapshot(text, format, _render, _timeout) when format != :dot do
     {:ok, %{format: format, text: text}}
   end
 
-  defp render_snapshot(dot, :dot, render) when render in [:dot, "dot", false, nil] do
+  defp render_snapshot(dot, :dot, render, _timeout) when render in [:dot, "dot", false, nil] do
     {:ok, %{format: :dot, text: dot, dot: dot}}
   end
 
-  defp render_snapshot(dot, :dot, render) when render in [:auto, "auto", :svg, "svg", true] do
+  defp render_snapshot(dot, :dot, render, timeout)
+       when render in [:auto, "auto", :svg, "svg", true] do
     case System.find_executable("dot") do
       nil when render in [:auto, "auto", true] ->
         {:ok, %{format: :dot, text: dot, dot: dot}}
@@ -208,13 +266,14 @@ defmodule Egglog.Common do
         {:error, {:graphviz_missing, "could not find dot executable on PATH"}}
 
       _dot ->
-        render_svg(dot)
+        render_svg(dot, timeout)
     end
   end
 
-  defp render_snapshot(_text, _format, render), do: {:error, {:unsupported_render, render}}
+  defp render_snapshot(_text, _format, render, _timeout),
+    do: {:error, {:unsupported_render, render}}
 
-  defp render_svg(dot) do
+  defp render_svg(dot, timeout) do
     # A private directory avoids collisions across concurrent BEAM instances.
     directory =
       Path.join(
@@ -228,11 +287,13 @@ defmodule Egglog.Common do
     try do
       with :ok <- File.mkdir(directory),
            :ok <- File.write(dot_path, dot),
-           {:ok, _} <- run_graphviz(dot_path, svg_path),
+           :ok <- if(match?({:unix, _}, :os.type()), do: File.chmod(directory, 0o700), else: :ok),
+           {:ok, _} <- Egglog.Graphviz.render(dot_path, svg_path, timeout),
            {:ok, svg} <- File.read(svg_path) do
         {:ok, %{format: :svg, text: svg, svg: svg, dot: dot}}
       else
         {:error, {:graphviz_failed, _, _}} = error -> error
+        {:error, {:graphviz_timeout, _}} = error -> error
         {:error, reason} -> {:error, {:snapshot_io, reason}}
       end
     rescue
@@ -242,16 +303,8 @@ defmodule Egglog.Common do
     end
   end
 
-  defp run_graphviz(dot_path, svg_path) do
-    case System.cmd("dot", ["-Tsvg", dot_path, "-o", svg_path], stderr_to_stdout: true) do
-      {output, 0} -> {:ok, output}
-      {output, status} -> {:error, {:graphviz_failed, status, output}}
-    end
-  end
-
   defp write_snapshot_artifacts(snapshot, opts) do
-    Enum.reduce_while(@snapshot_artifact_keys -- [:render], {:ok, snapshot}, fn key,
-                                                                                {:ok, snapshot} ->
+    Enum.reduce_while(@snapshot_artifact_keys, {:ok, snapshot}, fn key, {:ok, snapshot} ->
       content =
         case key do
           :dot_path -> snapshot.dot

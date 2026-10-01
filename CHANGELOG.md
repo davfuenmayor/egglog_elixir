@@ -1,6 +1,15 @@
 # Changelog
 
-## Unreleased
+## Unreleased (0.2.0)
+
+* Pin egglog 3.0.0 revision `b912caa9694c0c029f9ae3d91db0adc8824e14f5`.
+* Native declaration inspection, pattern queries, and mutable table clearing.
+* Per-graph thread configuration, including load-time settings retained by clones.
+* Discard program bases after caught panics; preserve unexpected server exit reasons.
+* Request helpers consistently normalize string-key inputs before appending requests.
+* Prepare versioned, checksum-verified native distribution and release tooling.
+* Bound SVG rendering with `:render_timeout` and terminate Graphviz on expiration.
+* Share native output display helpers; remove source-derived check messages from Livebooks.
 
 * Dirty scheduling for native counting and closing; panic-safe resource handling.
 * Creator-monitored mutable sessions and scoped program/graph helpers.

@@ -1,4 +1,4 @@
 %{
-  "libegglog_nif-v0.1.0-nif-2.15-x86_64-unknown-linux-gnu.so.tar.gz" =>
-    "sha256:96a9f9c3e508209d66022bbd583c1ae15697d1b39bac6fcfa93a92159ae62a8b"
+  "libegglog_nif-v0.2.0-nif-2.15-x86_64-unknown-linux-gnu.so.tar.gz" =>
+    "sha256:a5193d7a182d4b59db58000b846b2b604e7b5fe5a6fc555ecdc004b9d018f8ba"
 }

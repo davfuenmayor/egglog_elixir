@@ -12,7 +12,11 @@ defmodule Egglog.EGraph.Server do
   def call(pid, request) when is_pid(pid) do
     GenServer.call(pid, request, :infinity)
   catch
-    :exit, _reason -> {:error, {:closed, "egraph session is not available"}}
+    :exit, {reason, {GenServer, :call, _}} when reason in [:noproc, :normal, :shutdown] ->
+      {:error, {:closed, "egraph session is not available"}}
+
+    :exit, {reason, {GenServer, :call, _}} ->
+      {:error, {:session_exit, reason}}
   end
 
   @impl true
@@ -20,7 +24,8 @@ defmodule Egglog.EGraph.Server do
     source = Keyword.fetch!(opts, :source)
     proofs? = Keyword.fetch!(opts, :proofs?)
 
-    case Native.new_egraph(source, proofs?) |> Common.from_native_load() do
+    case Native.new_egraph(source, proofs?, Keyword.fetch!(opts, :num_threads))
+         |> Common.from_native_load() do
       {:ok, ref} -> {:ok, %{ref: ref, owner: Process.monitor(Keyword.fetch!(opts, :owner))}}
       {:error, reason} -> {:stop, reason}
     end
@@ -84,6 +89,30 @@ defmodule Egglog.EGraph.Server do
   def handle_call(:num_tuples, _from, %{ref: ref} = state) do
     result = ref |> Native.egraph_num_tuples() |> Common.from_native_count()
     reply(result, state)
+  end
+
+  def handle_call(:functions, _from, %{ref: ref} = state) do
+    reply(Native.functions_egraph(ref) |> Common.from_native_functions(), state)
+  end
+
+  def handle_call({:function, name}, _from, %{ref: ref} = state) do
+    reply(Native.function_egraph(ref, name) |> Common.from_native_function(), state)
+  end
+
+  def handle_call({:clear_function, name}, _from, %{ref: ref} = state) do
+    reply(Native.clear_function_egraph(ref, name) |> Common.from_native_close(), state)
+  end
+
+  def handle_call({:query, vars, facts}, _from, %{ref: ref} = state) do
+    reply(Native.query_egraph(ref, vars, facts) |> Common.from_native_bindings(), state)
+  end
+
+  def handle_call(:num_threads, _from, %{ref: ref} = state) do
+    reply(Native.egraph_num_threads(ref) |> Common.from_native_count(), state)
+  end
+
+  def handle_call({:set_num_threads, count}, _from, %{ref: ref} = state) do
+    reply(Native.set_egraph_num_threads(ref, count) |> Common.from_native_close(), state)
   end
 
   def handle_call(:close, _from, %{ref: ref} = state) do

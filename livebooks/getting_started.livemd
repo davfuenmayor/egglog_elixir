@@ -27,7 +27,7 @@ export PATH="$HOME/.cargo/bin:$PATH"
 livebook server
 ```
 
-When using the published package, replace the dependency with `{:egglog_elixir, "~> 0.1"}`.
+When using the published package, replace the dependency with `{:egglog_elixir, "~> 0.2"}`.
 
 ```elixir
 Mix.install([
@@ -61,58 +61,15 @@ The important boundary is:
 
 ## Tiny Helpers
 
-These helpers are display-only. They do not run egglog.
+`Egglog.Output.print/2` prints native output, optionally filtered by type.
+`Egglog.Snapshot.summary/1` summarizes native JSON. Successful commands can be
+silent; these helpers do not infer results from the submitted source. The small
+helper below only displays an SVG through Kino or returns DOT text.
 
 ```elixir
 defmodule GettingStarted do
-  def print_output(result, type) do
-    result.outputs
-    |> Enum.filter(&(&1.type == type))
-    |> Enum.map(& &1.text)
-    |> Enum.reject(&is_nil/1)
-    |> Enum.map(&String.trim_trailing/1)
-    |> Enum.reject(&(&1 == ""))
-    |> Enum.each(&IO.puts/1)
-  end
-
-  def print_outputs(result) do
-    result.outputs
-    |> Enum.map(& &1.text)
-    |> Enum.reject(&is_nil/1)
-    |> Enum.map(&String.trim_trailing/1)
-    |> Enum.reject(&(&1 == ""))
-    |> Enum.each(&IO.puts/1)
-  end
-
-  def show_run(result) do
-    %{
-      status: result.status,
-      stats: result.stats
-    }
-  end
-
-  def render_snapshot(%{format: :svg, svg: svg}) when is_binary(svg) do
-    kino_html = Module.concat(Kino, HTML)
-
-    if Code.ensure_loaded?(kino_html) do
-      apply(kino_html, :new, [svg])
-    else
-      svg
-    end
-  end
-
+  def render_snapshot(%{format: :svg, svg: svg}), do: Kino.HTML.new(svg)
   def render_snapshot(%{text: text}), do: text
-
-  def snapshot_summary(snapshot) do
-    summary = Egglog.Snapshot.summary(snapshot)
-
-    %{
-      e_nodes: summary.nodes,
-      e_classes: summary.classes,
-      by_operator: summary.operators,
-      omitted: summary.omitted
-    }
-  end
 end
 ```
 
@@ -156,8 +113,8 @@ input = %{
 
 result = Egglog.Program.run!(math, input)
 
-GettingStarted.print_output(result, :extract)
-GettingStarted.show_run(result)
+Egglog.Output.print(result, :extract)
+Map.take(result, [:status, :stats])
 ```
 
 The extracted term is the representative chosen by egglog after saturation.
@@ -173,7 +130,7 @@ what native egglog built.
 ```elixir
 snapshot = Egglog.snapshot!(math, input)
 
-GettingStarted.snapshot_summary(
+Egglog.Snapshot.summary(
   Egglog.snapshot!(math, input, render: :json)
 )
 ```
@@ -219,7 +176,7 @@ before_union =
     ]
   })
 
-GettingStarted.print_outputs(before_union)
+Egglog.Output.print(before_union)
 ```
 
 Now assert `A = B` for this query. Congruence closure propagates that equality
@@ -241,8 +198,8 @@ after_union_input = %{
 
 after_union = Egglog.Program.run!(cc, after_union_input)
 
-GettingStarted.print_output(after_union, :extract)
-GettingStarted.show_run(after_union)
+Egglog.Output.print(after_union, :extract)
+Map.take(after_union, [:status, :stats])
 ```
 
 ```elixir
@@ -255,8 +212,8 @@ congruence invariant: equal children imply equal parent applications.
 
 ## 4. Datalog Facts
 
-Egglog is also a Datalog-style engine. Relations are represented as
-unit-valued functions, and rules derive new rows.
+Egglog is also a Datalog-style engine. In egglog 3.0, relations are
+non-unionable constructors, and rules derive new rows.
 
 This example computes transitive reachability.
 
@@ -293,8 +250,8 @@ reach_input = %{
 
 reach_result = Egglog.Program.run!(reach, reach_input)
 
-GettingStarted.print_output(reach_result, :print_function)
-GettingStarted.show_run(reach_result)
+Egglog.Output.print(reach_result, :print_function)
+Map.take(reach_result, [:status, :stats])
 ```
 
 The interesting point is that the same native runtime is maintaining both
@@ -333,7 +290,7 @@ without_guard_input = %{
 
 without_guard = Egglog.Program.run!(guarded, without_guard_input)
 
-GettingStarted.print_output(without_guard, :extract)
+Egglog.Output.print(without_guard, :extract)
 ```
 
 With the fact, the guarded rewrite fires.
@@ -348,7 +305,7 @@ with_guard_input = %{
 
 with_guard = Egglog.Program.run!(guarded, with_guard_input)
 
-GettingStarted.print_output(with_guard, :extract)
+Egglog.Output.print(with_guard, :extract)
 ```
 
 ```elixir
@@ -386,7 +343,7 @@ Each successful `run/3` mutates this one native session.
   (extract x)
   """)
 
-GettingStarted.print_output(egraph_result, :extract)
+Egglog.Output.print(egraph_result, :extract)
 ```
 
 Because the state persists, later calls can inspect what earlier calls inserted.
@@ -405,6 +362,52 @@ Use the two models deliberately:
 
 * `Egglog.Program` for reproducible, isolated queries against a loaded theory.
 * `Egglog.EGraph` for REPL/Livebook sessions where state should accumulate.
+
+## 7. Native Queries And Resource Lifetime
+
+Use `query/5` to receive structured bindings instead of parsing printed rows.
+Variable names and fact syntax remain visible; Rust performs the matching.
+The input and schedule run on a clone, so the loaded theory stays reusable.
+
+```elixir
+Egglog.Program.with_program(reachability_theory, fn program ->
+  destinations =
+    Egglog.Program.query!(program, reach_input, [destination: "i64"], ["(path 1 destination)"])
+    |> Enum.map(& &1["destination"].value)
+    |> Enum.sort()
+
+  %{destinations: destinations, schema: Egglog.Program.function!(program, "path")}
+end, num_threads: 1)
+```
+
+`with_program/3` and `EGraph.with_egraph/3` close their handles in `after`, even
+when the callback raises or throws. Return ordinary results from the callback;
+a returned handle has already been closed. Calls from other processes must
+finish before the scope ends. A mutable graph also closes when its creator exits.
+
+`num_threads: 1` keeps native execution serial; `0` selects available
+parallelism. The setting belongs to each graph and is inherited by program
+clones. Concurrent calls on one program are serialized; independently loaded
+programs can execute concurrently. Waiting calls use an infinite timeout because
+a caller timeout would not cancel work already running in Rust.
+
+For a mutable session, native `clear_function/2` removes rows while preserving
+the declaration. Native `push`/`pop` also apply to that operation.
+
+```elixir
+Egglog.EGraph.with_egraph("(relation visited (i64))\n(visited 1)", fn graph ->
+  :ok = Egglog.EGraph.clear_function(graph, "visited")
+  Egglog.EGraph.query!(graph, [node: "i64"], ["(visited node)"])
+end)
+```
+
+Close the handles used in the preceding examples when you have finished
+exploring them:
+
+```elixir
+Enum.each([math, cc, reach, guarded], &Egglog.Program.close/1)
+Egglog.EGraph.close(egraph)
+```
 
 ## What To Try Next
 

@@ -22,7 +22,7 @@ egglog = """
 """
 
 {:ok, result} = Egglog.EGraph.run(egraph, egglog)
-Tutorial.print_outputs(result, egglog)
+Egglog.Output.print(result)
 ```
 
 <!-- livebook:{"break_markdown":true} -->
@@ -44,75 +44,8 @@ Mix.install([
 
 ```elixir
 defmodule Tutorial do
-  def print_outputs(result, code \\ "") do
-    (result.outputs ++ check_outputs(code))
-    |> Enum.map(& &1.text)
-    |> Enum.reject(&is_nil/1)
-    |> Enum.map(&String.trim_trailing/1)
-    |> Enum.reject(&(&1 == ""))
-    |> Enum.each(&IO.puts/1)
-  end
-
-  def render_snapshot(%{format: :svg, svg: svg}) when is_binary(svg) do
-    kino_html = Module.concat(Kino, HTML)
-
-    if Code.ensure_loaded?(kino_html) do
-      apply(kino_html, :new, [svg])
-    else
-      svg
-    end
-  end
-
+  def render_snapshot(%{format: :svg, svg: svg}), do: Kino.HTML.new(svg)
   def render_snapshot(%{text: text}), do: text
-
-  def summarize_egraph(egraph, opts \\ []) do
-    summary =
-      egraph
-      |> json_snapshot(opts)
-      |> Egglog.Snapshot.summary()
-
-    %{
-      e_nodes: summary.nodes,
-      e_classes: summary.classes,
-      by_operator: summary.operators,
-      omitted: summary.omitted
-    }
-  end
-
-  def sample_json_snapshot(egraph, opts \\ []) do
-    snapshot = json_snapshot(egraph, opts)
-    graph = Jason.decode!(snapshot.json)
-
-    %{
-      format: snapshot.format,
-      top_level_keys: Map.keys(graph) |> Enum.sort(),
-      node_count: map_size(graph["nodes"]),
-      class_count: map_size(graph["class_data"]),
-      sample_node: graph["nodes"] |> Enum.take(1)
-    }
-  end
-
-  defp json_snapshot(egraph, opts) do
-    Egglog.EGraph.snapshot!(egraph, Keyword.merge([render: :json], opts))
-  end
-
-  defp check_outputs(code) do
-    code
-    |> String.split("\n")
-    |> Enum.map(&String.trim/1)
-    |> Enum.reject(&(&1 == ""))
-    |> Enum.filter(&String.contains?(&1, "(check "))
-    |> Enum.map(fn line ->
-      text =
-        if String.starts_with?(line, "(fail ") do
-          "expected failure observed: #{line}"
-        else
-          "check succeeded: #{line}"
-        end
-
-      %{type: :check_success, text: text <> "\n"}
-    end)
-  end
 end
 
 {:ok, egraph} = Egglog.EGraph.new()
@@ -120,11 +53,11 @@ end
 
 From here on, the important API call is `Egglog.EGraph.run(egraph, egglog)`. The e-graph is stateful, so every successful run mutates the same native session.
 
-The remaining `Tutorial` functions are display helpers:
+The display helpers leave execution to native egglog:
 
-`Tutorial.print_outputs(result, egglog)` shows printed egglog output and friendly messages for successful checks.
-`Tutorial.summarize_egraph(egraph)` asks the wrapper for a JSON snapshot and summarizes the current e-graph.
-`Tutorial.sample_json_snapshot(egraph)` shows a small sample of the native JSON snapshot format.
+`Egglog.Output.print(result)` prints only text returned by native egglog. Successful checks may be silent; matching `{:ok, result}` confirms the batch completed successfully.
+`Egglog.Snapshot.summary/1` summarizes the native JSON snapshot without reconstructing an e-graph.
+The JSON example below also inspects a small sample of the native snapshot format.
 `Tutorial.render_snapshot(snapshot)` turns an SVG snapshot into Livebook HTML when Graphviz is available.
 
 ## Equality Saturation
@@ -164,7 +97,8 @@ egglog = """
 """
 
 {:ok, _result} = Egglog.EGraph.run(egraph, egglog)
-Tutorial.summarize_egraph(egraph)
+Egglog.EGraph.snapshot!(egraph, render: :json)
+|> Egglog.Snapshot.summary()
 ```
 
 Now, let's define some simple expressions.
@@ -183,7 +117,8 @@ egglog = """
 """
 
 {:ok, _result} = Egglog.EGraph.run(egraph, egglog)
-Tutorial.summarize_egraph(egraph)
+Egglog.EGraph.snapshot!(egraph, render: :json)
+|> Egglog.Snapshot.summary()
 ```
 
 Now the e-graph under discussion contains two named terms:
@@ -203,7 +138,14 @@ Egglog.EGraph.snapshot!(egraph)
 The same native serializer can export JSON. This is more useful for programmatic inspection than for visualization. The top-level maps expose serialized e-nodes and e-class metadata.
 
 ```elixir
-Tutorial.sample_json_snapshot(egraph)
+graph = Egglog.EGraph.snapshot!(egraph, render: :json) |> Egglog.Snapshot.decode!()
+
+%{
+  top_level_keys: Map.keys(graph) |> Enum.sort(),
+  node_count: map_size(graph["nodes"]),
+  class_count: map_size(graph["class_data"]),
+  sample_node: graph["nodes"] |> Enum.take(1)
+}
 ```
 
 The JSON summary is intentionally small: count e-nodes, count e-classes, and show which constructors currently appear. Think of e-nodes as operation-symbol applications and e-classes as congruence classes.
@@ -226,15 +168,16 @@ egglog = """
 """
 
 {:ok, result} = Egglog.EGraph.run(egraph, egglog)
-Tutorial.print_outputs(result, egglog)
-Tutorial.summarize_egraph(egraph)
+Egglog.Output.print(result)
+Egglog.EGraph.snapshot!(egraph, render: :json)
+|> Egglog.Snapshot.summary()
 ```
 
 Right now extraction is boring: each e-class mostly contains the term we inserted. Later, after saturation, extraction will choose among many equivalent terms.
 
 We can use the `check` commands to check properties of our e-graph.
 
-Successful checks in egglog are assertions: they normally print nothing. The Livebook helper makes them visible by adding a small `:check_success` output. We also ask for an extraction and a JSON snapshot summary so the cell shows what the assertion is talking about.
+Successful checks in egglog are assertions: they normally print nothing. Matching `{:ok, result}` confirms that the submitted batch completed successfully. We also ask for an extraction and a JSON snapshot summary so the cell shows what the assertion is talking about.
 
 ```egglog
 (check (= expr1 (Mul x y)))
@@ -248,8 +191,9 @@ egglog = """
 """
 
 {:ok, result} = Egglog.EGraph.run(egraph, egglog)
-Tutorial.print_outputs(result, egglog)
-Tutorial.summarize_egraph(egraph)
+Egglog.Output.print(result)
+Egglog.EGraph.snapshot!(egraph, render: :json)
+|> Egglog.Snapshot.summary()
 ```
 
 This checks if `expr1` is equivalent to some expression `(Mul x y)`, where `x` and `y` are
@@ -275,7 +219,7 @@ egglog = """
 """
 
 {:ok, result} = Egglog.EGraph.run(egraph, egglog)
-Tutorial.print_outputs(result, egglog)
+Egglog.Output.print(result)
 ```
 
 `fail` is egglog's way to turn an expected failed check into a successful command. In a tutorial or test, this is usually better than letting a failed check abort the whole cell.
@@ -292,7 +236,8 @@ egglog = """
 """
 
 {:ok, _result} = Egglog.EGraph.run(egraph, egglog)
-Tutorial.summarize_egraph(egraph)
+Egglog.EGraph.snapshot!(egraph, render: :json)
+|> Egglog.Snapshot.summary()
 ```
 
 This rule asserts that addition is commutative. Operationally: whenever the e-graph contains a term matching `(Add x y)`, egglog may add `(Add y x)` and union the two e-classes.
@@ -309,7 +254,8 @@ egglog = """
 """
 
 {:ok, _result} = Egglog.EGraph.run(egraph, egglog)
-Tutorial.summarize_egraph(egraph)
+Egglog.EGraph.snapshot!(egraph, render: :json)
+|> Egglog.Snapshot.summary()
 ```
 
 This rule says that a right-nested addition may be associated to the left. Notice that we are giving egglog equations, not an evaluator. A rewrite adds equality information; it does not destructively replace the old term.
@@ -330,8 +276,9 @@ egglog = """
 """
 
 {:ok, result} = Egglog.EGraph.run(egraph, egglog)
-Tutorial.print_outputs(result, egglog)
-Tutorial.summarize_egraph(egraph)
+Egglog.Output.print(result)
+Egglog.EGraph.snapshot!(egraph, render: :json)
+|> Egglog.Snapshot.summary()
 ```
 
 1. Rules are not instantiated for every possible ground term in the free algebra. They are instantiated against terms currently represented in the e-graph. To show this cleanly, we run only the addition rules and then check a term that was never inserted as a named expression.
@@ -350,8 +297,9 @@ egglog = """
 """
 
 {:ok, result} = Egglog.EGraph.run(egraph, egglog)
-Tutorial.print_outputs(result, egglog)
-Tutorial.summarize_egraph(egraph)
+Egglog.Output.print(result)
+Egglog.EGraph.snapshot!(egraph, render: :json)
+|> Egglog.Snapshot.summary()
 ```
 
 After the one-step run, `add_probe` is equivalent to its swapped form because `add_probe` was present and matched the rule. The unrelated `-2 + 2` and `2 + -2` terms are not automatically equated merely because the rule exists: equality saturation is saturation of the current e-graph, not enumeration of every ground term over the signature.
@@ -370,7 +318,8 @@ egglog = """
 """
 
 {:ok, _result} = Egglog.EGraph.run(egraph, egglog)
-Tutorial.summarize_egraph(egraph)
+Egglog.EGraph.snapshot!(egraph, render: :json)
+|> Egglog.Snapshot.summary()
 ```
 
 `egglog` also defines a set of built-in functions over the primitive types, such as `+` and `*`.
@@ -385,7 +334,7 @@ egglog = """
 """
 
 {:ok, result} = Egglog.EGraph.run(egraph, egglog)
-Tutorial.print_outputs(result, egglog)
+Egglog.Output.print(result)
 ```
 
 `egglog` supports operator overloading, so the same operator can be used with different types.
@@ -402,8 +351,9 @@ egglog = """
 """
 
 {:ok, result} = Egglog.EGraph.run(egraph, egglog)
-Tutorial.print_outputs(result, egglog)
-Tutorial.summarize_egraph(egraph)
+Egglog.Output.print(result)
+Egglog.EGraph.snapshot!(egraph, render: :json)
+|> Egglog.Snapshot.summary()
 ```
 
 With primitives, we can define rewrite rules that talk about the semantics of operators. The following rules show constant folding over addition and multiplication.
@@ -424,7 +374,8 @@ egglog = """
 """
 
 {:ok, _result} = Egglog.EGraph.run(egraph, egglog)
-Tutorial.summarize_egraph(egraph)
+Egglog.EGraph.snapshot!(egraph, render: :json)
+|> Egglog.Snapshot.summary()
 ```
 
 The addition rules have already acted on `add_probe`, but the multiplication and constant-folding rules have not yet optimized `expr1` or connected it to `expr2`. To run the rules we have defined so far, we can use the `run` command.
@@ -443,8 +394,9 @@ egglog = """
 """
 
 {:ok, result} = Egglog.EGraph.run(egraph, egglog)
-Tutorial.print_outputs(result, egglog)
-Tutorial.summarize_egraph(egraph)
+Egglog.Output.print(result)
+Egglog.EGraph.snapshot!(egraph, render: :json)
+|> Egglog.Snapshot.summary()
 ```
 
 At this point the graph contains the original expressions and the alternatives created by associativity, commutativity, and constant folding. In particular, egglog can discover the path
@@ -491,8 +443,9 @@ egglog = """
 """
 
 {:ok, result} = Egglog.EGraph.run(egraph, egglog)
-Tutorial.print_outputs(result, egglog)
-Tutorial.summarize_egraph(egraph)
+Egglog.Output.print(result)
+Egglog.EGraph.snapshot!(egraph, render: :json)
+|> Egglog.Snapshot.summary()
 ```
 
 The check is the important mathematical assertion: the two named terms now lie in the same congruence class generated by the rewrite equations and the currently represented terms.
@@ -546,8 +499,9 @@ egglog = """
 """
 
 {:ok, result} = Egglog.EGraph.run(egraph, egglog)
-Tutorial.print_outputs(result, egglog)
-Tutorial.summarize_egraph(egraph)
+Egglog.Output.print(result)
+Egglog.EGraph.snapshot!(egraph, render: :json)
+|> Egglog.Snapshot.summary()
 ```
 
 The first check is wrapped in `fail` because before running the new rule, `expr3` and `expr4` should not yet be known equal. After `run 10`, distributivity, commutativity, associativity, and constant folding are enough to put them in the same e-class.

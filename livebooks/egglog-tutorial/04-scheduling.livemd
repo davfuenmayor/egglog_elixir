@@ -17,62 +17,8 @@ Mix.install([
 
 ```elixir
 defmodule Tutorial do
-  def print_outputs(result, code \\ "") do
-    (result.outputs ++ check_outputs(code))
-    |> Enum.map(& &1.text)
-    |> Enum.reject(&is_nil/1)
-    |> Enum.map(&String.trim_trailing/1)
-    |> Enum.reject(&(&1 == ""))
-    |> Enum.each(&IO.puts/1)
-  end
-
-  def render_snapshot(%{format: :svg, svg: svg}) when is_binary(svg) do
-    kino_html = Module.concat(Kino, HTML)
-
-    if Code.ensure_loaded?(kino_html) do
-      apply(kino_html, :new, [svg])
-    else
-      svg
-    end
-  end
-
+  def render_snapshot(%{format: :svg, svg: svg}), do: Kino.HTML.new(svg)
   def render_snapshot(%{text: text}), do: text
-
-  def summarize_egraph(egraph, opts \\ []) do
-    summary =
-      egraph
-      |> json_snapshot(opts)
-      |> Egglog.Snapshot.summary()
-
-    %{
-      e_nodes: summary.nodes,
-      e_classes: summary.classes,
-      by_operator: summary.operators,
-      omitted: summary.omitted
-    }
-  end
-
-  defp json_snapshot(egraph, opts) do
-    Egglog.EGraph.snapshot!(egraph, Keyword.merge([render: :json], opts))
-  end
-
-  defp check_outputs(code) do
-    code
-    |> String.split("\n")
-    |> Enum.map(&String.trim/1)
-    |> Enum.reject(&(&1 == ""))
-    |> Enum.filter(&String.contains?(&1, "(check "))
-    |> Enum.map(fn line ->
-      text =
-        if String.starts_with?(line, "(fail ") do
-          "expected failure observed: #{line}"
-        else
-          "check succeeded: #{line}"
-        end
-
-      %{type: :check_success, text: text <> "\n"}
-    end)
-  end
 end
 
 {:ok, egraph} = Egglog.EGraph.new()
@@ -125,7 +71,7 @@ egglog = """
 """
 
 {:ok, result} = Egglog.EGraph.run(egraph, egglog)
-Tutorial.print_outputs(result, egglog)
+Egglog.Output.print(result)
 ```
 
 **Rulesets**
@@ -144,7 +90,7 @@ egglog = """
 """
 
 {:ok, result} = Egglog.EGraph.run(egraph, egglog)
-Tutorial.print_outputs(result, egglog)
+Egglog.Output.print(result)
 ```
 
 We can add rules to rulesets using the `:ruleset` annotation on `rule`s, `rewrite`s, and `birewrite`s.
@@ -175,7 +121,7 @@ egglog = """
 """
 
 {:ok, result} = Egglog.EGraph.run(egraph, egglog)
-Tutorial.print_outputs(result, egglog)
+Egglog.Output.print(result)
 ```
 
 In contrast, the following axiomatic rules are doing optimizations, so we add them to the `optimizations` ruleset.
@@ -206,7 +152,7 @@ egglog = """
 """
 
 {:ok, result} = Egglog.EGraph.run(egraph, egglog)
-Tutorial.print_outputs(result, egglog)
+Egglog.Output.print(result)
 ```
 
 It is tedious and error-prone to manually annotate each rule with a ruleset,
@@ -271,7 +217,7 @@ egglog = """
 """
 
 {:ok, result} = Egglog.EGraph.run(egraph, egglog)
-Tutorial.print_outputs(result, egglog)
+Egglog.Output.print(result)
 ```
 
 Finally, we have optimization rules that depend on the analysis rules we defined above.
@@ -288,7 +234,7 @@ egglog = """
 """
 
 {:ok, result} = Egglog.EGraph.run(egraph, egglog)
-Tutorial.print_outputs(result, egglog)
+Egglog.Output.print(result)
 ```
 
 Now consider the following program, which consists of a long sequence of additions _inside_
@@ -322,7 +268,7 @@ egglog = """
 """
 
 {:ok, result} = Egglog.EGraph.run(egraph, egglog)
-Tutorial.print_outputs(result, egglog)
+Egglog.Output.print(result)
 ```
 
 We want the following check to pass after running the rules.
@@ -337,13 +283,14 @@ egglog = """
 """
 
 {:ok, result} = Egglog.EGraph.run(egraph, egglog)
-Tutorial.print_outputs(result, egglog)
+Egglog.Output.print(result)
 ```
 
 Before any schedule runs, the e-graph contains the long addition chain and the cancelling division, but not yet the analysis facts needed by the guarded rewrite.
 
 ```elixir
-Tutorial.summarize_egraph(egraph)
+Egglog.EGraph.snapshot!(egraph, render: :json)
+|> Egglog.Snapshot.summary()
 ```
 
 ```elixir
@@ -372,7 +319,7 @@ egglog = """
 """
 
 {:ok, result} = Egglog.EGraph.run(egraph, egglog)
-Tutorial.print_outputs(result, egglog)
+Egglog.Output.print(result)
 ```
 
 **Schedules**
@@ -390,7 +337,7 @@ egglog = """
 """
 
 {:ok, result} = Egglog.EGraph.run(egraph, egglog)
-Tutorial.print_outputs(result, egglog)
+Egglog.Output.print(result)
 ```
 
 After saturating only the analysis rules, the useful facts have been derived without running the associativity/commutativity-heavy optimization ruleset.
@@ -398,7 +345,8 @@ After saturating only the analysis rules, the useful facts have been derived wit
 Compare this summary with the previous one: the database has learned facts, but it has avoided most term explosion.
 
 ```elixir
-Tutorial.summarize_egraph(egraph)
+Egglog.EGraph.snapshot!(egraph, render: :json)
+|> Egglog.Snapshot.summary()
 ```
 
 ```elixir
@@ -418,13 +366,14 @@ egglog = """
 """
 
 {:ok, result} = Egglog.EGraph.run(egraph, egglog)
-Tutorial.print_outputs(result, egglog)
+Egglog.Output.print(result)
 ```
 
 Now the guarded optimization has had a chance to use the analysis facts. Comparing this snapshot with the previous one shows why schedule order matters.
 
 ```elixir
-Tutorial.summarize_egraph(egraph)
+Egglog.EGraph.snapshot!(egraph, render: :json)
+|> Egglog.Snapshot.summary()
 ```
 
 ```elixir
@@ -454,7 +403,7 @@ egglog = """
 """
 
 {:ok, result} = Egglog.EGraph.run(egraph, egglog)
-Tutorial.print_outputs(result, egglog)
+Egglog.Output.print(result)
 ```
 
 The one-shot schedule above is effective for this specific term, but some problems require interleaving: optimize a little, analyze the new terms, optimize again. Egglog's scheduling language gives explicit control with primitives such as `repeat`, `seq`, `saturate`, and `run`.
@@ -482,7 +431,7 @@ egglog = """
 """
 
 {:ok, result} = Egglog.EGraph.run(egraph, egglog)
-Tutorial.print_outputs(result, egglog)
+Egglog.Output.print(result)
 ```
 
 Running more iterations does not help our above example per se,
@@ -518,7 +467,7 @@ egglog = """
 """
 
 {:ok, result} = Egglog.EGraph.run(egraph, egglog)
-Tutorial.print_outputs(result, egglog)
+Egglog.Output.print(result)
 ```
 
 For the purpose of this example, we add this rule
@@ -533,7 +482,7 @@ egglog = """
 """
 
 {:ok, result} = Egglog.EGraph.run(egraph, egglog)
-Tutorial.print_outputs(result, egglog)
+Egglog.Output.print(result)
 ```
 
 To prove `expr` is equivalent to `addition-chian` by applying the cancellation law, 
@@ -568,7 +517,7 @@ egglog = """
 """
 
 {:ok, result} = Egglog.EGraph.run(egraph, egglog)
-Tutorial.print_outputs(result, egglog)
+Egglog.Output.print(result)
 ```
 
 Instead, we need to increase the iteration number.
@@ -595,7 +544,7 @@ egglog = """
 """
 
 {:ok, result} = Egglog.EGraph.run(egraph, egglog)
-Tutorial.print_outputs(result, egglog)
+Egglog.Output.print(result)
 ```
 
 The contrast between `repeat 1` and `repeat 2` is the point of the example. The first schedule cannot prove enough facts before extraction; the second gives the analysis a second chance after optimization has simplified `x * 0`.
@@ -630,7 +579,7 @@ egglog = """
 """
 
 {:ok, result} = Egglog.EGraph.run(egraph, egglog)
-Tutorial.print_outputs(result, egglog)
+Egglog.Output.print(result)
 ```
 
 At iteration 5, the `Mul` function has size 582. However, if we bump that to 6,
