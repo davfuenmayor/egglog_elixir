@@ -3,14 +3,18 @@ use egglog::{
     sort::{F, Q, S, Z},
 };
 
+use crate::error::NativeError;
+
 pub type NativeValue = (String, String, String);
 
-pub fn eval_expr(egraph: &mut EGraph, expr: &str) -> Result<NativeValue, String> {
+pub fn eval_expr(egraph: &mut EGraph, expr: &str) -> Result<NativeValue, NativeError> {
     let parsed = egraph
         .parser
         .get_expr_from_string(None, expr)
-        .map_err(|err| err.to_string())?;
-    let (sort, value) = egraph.eval_expr(&parsed).map_err(|err| err.to_string())?;
+        .map_err(|err| NativeError::Native(err.to_string()))?;
+    let (sort, value) = egraph
+        .eval_expr(&parsed)
+        .map_err(|err| NativeError::Native(err.to_string()))?;
     Ok(encode_value(egraph, sort.name(), value))
 }
 
@@ -18,11 +22,11 @@ pub fn lookup_function(
     egraph: &mut EGraph,
     name: &str,
     arg_exprs: Vec<String>,
-) -> Result<Option<NativeValue>, String> {
+) -> Result<Option<NativeValue>, NativeError> {
     let (input_sort_names, output_sort_name) = {
         let schema = egraph
             .get_function(name)
-            .ok_or_else(|| format!("could not find function {name}"))?
+            .ok_or_else(|| NativeError::Native(format!("could not find function {name}")))?
             .schema();
 
         let input_sort_names = schema
@@ -35,11 +39,11 @@ pub fn lookup_function(
     };
 
     if arg_exprs.len() != input_sort_names.len() {
-        return Err(format!(
+        return Err(NativeError::Native(format!(
             "function {name} expects {} arguments, got {}",
             input_sort_names.len(),
             arg_exprs.len()
-        ));
+        )));
     }
 
     let mut key = Vec::with_capacity(arg_exprs.len());
@@ -48,14 +52,16 @@ pub fn lookup_function(
         let parsed = egraph
             .parser
             .get_expr_from_string(None, &expr)
-            .map_err(|err| err.to_string())?;
-        let (sort, value) = egraph.eval_expr(&parsed).map_err(|err| err.to_string())?;
+            .map_err(|err| NativeError::Native(err.to_string()))?;
+        let (sort, value) = egraph
+            .eval_expr(&parsed)
+            .map_err(|err| NativeError::Native(err.to_string()))?;
 
         if sort.name() != expected_sort {
-            return Err(format!(
+            return Err(NativeError::Native(format!(
                 "function {name} expected argument {expr} to have sort {expected_sort}, got {}",
                 sort.name()
-            ));
+            )));
         }
 
         key.push(value);

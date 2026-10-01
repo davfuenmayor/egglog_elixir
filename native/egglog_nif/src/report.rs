@@ -23,9 +23,7 @@ pub fn add_output_report_stats(outputs: &[CommandOutput], numeric_stats: &mut Ve
     let mut can_stop = true;
 
     for output in outputs {
-        if let CommandOutput::RunSchedule(report) | CommandOutput::OverallStatistics(report) =
-            output
-        {
+        if let CommandOutput::RunSchedule(report) = output {
             iterations += report.iterations.len() as i64;
             matches += report
                 .num_matches_per_rule
@@ -51,9 +49,7 @@ pub fn collect_reports(outputs: &[CommandOutput]) -> Vec<(String, Vec<(String, i
     let mut rebuild_us_per_ruleset = BTreeMap::<String, i64>::new();
 
     for output in outputs {
-        if let CommandOutput::RunSchedule(report) | CommandOutput::OverallStatistics(report) =
-            output
-        {
+        if let CommandOutput::RunSchedule(report) = output {
             for (rule, count) in &report.num_matches_per_rule {
                 add_entry(&mut matches_per_rule, rule.as_ref(), *count as i64);
             }

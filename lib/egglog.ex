@@ -9,9 +9,22 @@ defmodule Egglog do
   For interactive workflows where native egglog state should persist across
   calls, use `Egglog.EGraph`. It owns one mutable native session process and
   exposes native `push`/`pop` rollback points.
+
+  Scoped use closes native resources even when the callback raises:
+
+      iex> Egglog.Program.with_program("", fn program ->
+      ...>   Egglog.Program.eval(program, "", "(+ 1 2)")
+      ...> end)
+      {:ok, %{sort: "i64", type: :integer, value: 3}}
+
+  Native command text and schedules remain egglog's own language; the wrapper
+  does not implement an optimizer or a second execution engine.
   """
 
   alias Egglog.Program
+
+  @doc "Loads a program, returns the callback result, and closes it on success or failure. See `Egglog.Program.with_program/3`."
+  defdelegate with_program(source, fun, opts \\ []), to: Program
 
   @doc """
   Parses egglog source into a reusable `Egglog.Commands` handle.
@@ -19,13 +32,11 @@ defmodule Egglog do
   Parsed commands are useful when the same command sequence is executed
   repeatedly.
   """
-  @spec parse(String.t()) :: {:ok, Egglog.Commands.t()} | {:error, term()}
   defdelegate parse(source), to: Program
 
   @doc """
   Bang variant of `parse/1`.
   """
-  @spec parse!(String.t()) :: Egglog.Commands.t()
   defdelegate parse!(source), to: Program
 
   @doc """
@@ -37,13 +48,11 @@ defmodule Egglog do
 
   See `Egglog.Program.load/2` for supported options and defaults.
   """
-  @spec load(String.t() | map(), keyword() | map()) :: {:ok, Program.t()} | {:error, term()}
   defdelegate load(theory_spec, opts \\ []), to: Program
 
   @doc """
   Bang variant of `load/2`.
   """
-  @spec load!(String.t() | map(), keyword() | map()) :: Program.t()
   defdelegate load!(theory_spec, opts \\ []), to: Program
 
   @doc """
@@ -52,14 +61,11 @@ defmodule Egglog do
   See `Egglog.Program.run/3` for the structured input fields accepted by this
   facade, supported options, and defaults.
   """
-  @spec run(Program.t(), Program.input(), keyword() | map()) ::
-          {:ok, Program.run_result()} | {:error, term()}
   defdelegate run(program, input, opts \\ []), to: Program
 
   @doc """
   Bang variant of `run/3`.
   """
-  @spec run!(Program.t(), Program.input(), keyword() | map()) :: Program.run_result()
   defdelegate run!(program, input, opts \\ []), to: Program
 
   @doc """
@@ -68,8 +74,6 @@ defmodule Egglog do
 
   See `Egglog.Program.check/4` for supported options and defaults.
   """
-  @spec check(Program.t(), Program.input(), String.t(), keyword() | map()) ::
-          {:ok, boolean()} | {:error, term()}
   defdelegate check(program, input, fact, opts \\ []), to: Program
 
   @doc """
@@ -77,7 +81,6 @@ defmodule Egglog do
 
   See `Egglog.Program.check?/4` for supported options and defaults.
   """
-  @spec check?(Program.t(), Program.input(), String.t(), keyword() | map()) :: boolean()
   defdelegate check?(program, input, fact, opts \\ []), to: Program
 
   @doc """
@@ -85,8 +88,6 @@ defmodule Egglog do
 
   See `Egglog.Program.check_fail/4` for supported options and defaults.
   """
-  @spec check_fail(Program.t(), Program.input(), String.t(), keyword() | map()) ::
-          :ok | {:error, term()}
   defdelegate check_fail(program, input, fact, opts \\ []), to: Program
 
   @doc """
@@ -94,8 +95,6 @@ defmodule Egglog do
 
   See `Egglog.Program.extract/4` for supported options and defaults.
   """
-  @spec extract(Program.t(), Program.input(), String.t(), keyword() | map()) ::
-          {:ok, String.t()} | {:error, term()}
   defdelegate extract(program, input, expr, opts \\ []), to: Program
 
   @doc """
@@ -103,7 +102,6 @@ defmodule Egglog do
 
   See `Egglog.Program.extract!/4` for supported options and defaults.
   """
-  @spec extract!(Program.t(), Program.input(), String.t(), keyword() | map()) :: String.t()
   defdelegate extract!(program, input, expr, opts \\ []), to: Program
 
   @doc """
@@ -114,8 +112,6 @@ defmodule Egglog do
 
   See `Egglog.Program.eval/4` for supported options and defaults.
   """
-  @spec eval(Program.t(), Program.input(), String.t(), keyword() | map()) ::
-          {:ok, Program.value()} | {:error, term()}
   defdelegate eval(program, input, expr, opts \\ []), to: Program
 
   @doc """
@@ -123,7 +119,6 @@ defmodule Egglog do
 
   See `Egglog.Program.eval!/4` for supported options and defaults.
   """
-  @spec eval!(Program.t(), Program.input(), String.t(), keyword() | map()) :: Program.value()
   defdelegate eval!(program, input, expr, opts \\ []), to: Program
 
   @doc """
@@ -133,8 +128,6 @@ defmodule Egglog do
 
   See `Egglog.Program.lookup/5` for supported options and defaults.
   """
-  @spec lookup(Program.t(), Program.input(), String.t(), [String.t()], keyword() | map()) ::
-          {:ok, Program.value() | nil} | {:error, term()}
   defdelegate lookup(program, input, name, arg_exprs, opts \\ []), to: Program
 
   @doc """
@@ -142,8 +135,6 @@ defmodule Egglog do
 
   See `Egglog.Program.lookup!/5` for supported options and defaults.
   """
-  @spec lookup!(Program.t(), Program.input(), String.t(), [String.t()], keyword() | map()) ::
-          Program.value() | nil
   defdelegate lookup!(program, input, name, arg_exprs, opts \\ []), to: Program
 
   @doc """
@@ -151,8 +142,6 @@ defmodule Egglog do
 
   See `Egglog.Program.snapshot/3` for supported options and defaults.
   """
-  @spec snapshot(Program.t(), Program.input(), keyword() | map()) ::
-          {:ok, map()} | {:error, term()}
   defdelegate snapshot(program, input, opts \\ []), to: Program
 
   @doc """
@@ -160,7 +149,6 @@ defmodule Egglog do
 
   See `Egglog.Program.snapshot!/3` for supported options and defaults.
   """
-  @spec snapshot!(Program.t(), Program.input(), keyword() | map()) :: map()
   defdelegate snapshot!(program, input, opts \\ []), to: Program
 
   @doc """
@@ -168,12 +156,10 @@ defmodule Egglog do
 
   See `Egglog.Program.num_tuples/1` for details.
   """
-  @spec num_tuples(Program.t()) :: {:ok, non_neg_integer()} | {:error, term()}
   defdelegate num_tuples(program), to: Program
 
   @doc """
   Closes the loaded program.
   """
-  @spec close(Program.t()) :: :ok | {:error, term()}
   defdelegate close(program), to: Program
 end

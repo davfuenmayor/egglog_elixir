@@ -52,9 +52,8 @@ defmodule Egglog.Common do
           stats: Map.take(stats, [:snapshot_nodes, :snapshot_classes]),
           result: result
         }
-        |> write_snapshot_artifacts(opts)
 
-      {:ok, snapshot}
+      write_snapshot_artifacts(snapshot, opts)
     end
   end
 
@@ -63,26 +62,20 @@ defmodule Egglog.Common do
   def snapshot_options(opts, input \\ %{}) do
     %{
       format: get(opts, :snapshot, get(input, :snapshot, :none)) |> snapshot_format(),
-      max_functions:
-        get(opts, :snapshot_max_functions, get(input, :snapshot_max_functions, 0))
-        |> nonnegative_integer(),
+      max_functions: get(opts, :snapshot_max_functions, get(input, :snapshot_max_functions, 0)),
       max_calls_per_function:
         get(
           opts,
           :snapshot_max_calls_per_function,
           get(input, :snapshot_max_calls_per_function, 0)
-        )
-        |> nonnegative_integer(),
-      inline_leaves:
-        get(opts, :snapshot_inline_leaves, get(input, :snapshot_inline_leaves, 0))
-        |> nonnegative_integer(),
+        ),
+      inline_leaves: get(opts, :snapshot_inline_leaves, get(input, :snapshot_inline_leaves, 0)),
       split_primitive_outputs?:
         get(
           opts,
           :snapshot_split_primitive_outputs,
           get(input, :snapshot_split_primitive_outputs, false)
         )
-        |> truthy?()
     }
   end
 
@@ -102,12 +95,7 @@ defmodule Egglog.Common do
 
   def check_result({:ok, _result}), do: {:ok, true}
 
-  def check_result({:error, {:native_error, message}})
-      when is_binary(message) do
-    if String.contains?(message, "Check failed"),
-      do: {:ok, false},
-      else: {:error, {:native_error, message}}
-  end
+  def check_result({:error, {:check_failed, _message}}), do: {:ok, false}
 
   def check_result({:error, reason}), do: {:error, reason}
 
@@ -115,20 +103,20 @@ defmodule Egglog.Common do
   def ok_only({:error, reason}), do: {:error, reason}
 
   def extract_request(expr, opts) do
-    case get(option_map(opts), :variants) do
+    case get(opts, :variants) do
       nil -> "(extract #{expr})"
       variants -> "(extract #{expr} #{variants})"
     end
   end
 
-  def extraction({:ok, result}) do
-    text =
-      result.outputs
-      |> Enum.filter(&(&1.type in [:extract, :extract_variants]))
-      |> Enum.map_join(& &1.text)
-      |> String.trim_trailing("\n")
+  def extraction({:ok, %{status: :limit}}),
+    do: {:error, {:missing_extraction, "requested extraction was truncated"}}
 
-    {:ok, text}
+  def extraction({:ok, result}) do
+    case Enum.find(Enum.reverse(result.outputs), &(&1.type in [:extract, :extract_variants])) do
+      nil -> {:error, {:missing_extraction, "no extraction output"}}
+      output -> {:ok, String.trim_trailing(output.text, "\n")}
+    end
   end
 
   def extraction({:error, reason}), do: {:error, reason}
@@ -143,9 +131,6 @@ defmodule Egglog.Common do
     |> Enum.join("\n")
   end
 
-  def option_map(opts) when is_map(opts), do: opts
-  def option_map(opts) when is_list(opts), do: Map.new(opts)
-
   def get(map, key, default \\ nil) when is_map(map) do
     Map.get(map, key, Map.get(map, to_string(key), default))
   end
@@ -153,33 +138,9 @@ defmodule Egglog.Common do
   def required!(map, key),
     do: get(map, key) || raise(ArgumentError, "missing required key #{inspect(key)}")
 
-  def positive_integer(value) when is_integer(value) and value > 0, do: value
-
-  def positive_integer(value) when is_binary(value) do
-    case Integer.parse(value) do
-      {int, ""} when int > 0 -> int
-      _ -> nil
-    end
-  end
-
-  def positive_integer(_value), do: nil
-
-  def nonnegative_integer(value) when is_integer(value) and value >= 0, do: value
-
-  def nonnegative_integer(value) when is_binary(value) do
-    case Integer.parse(value) do
-      {int, ""} when int >= 0 -> int
-      _ -> 0
-    end
-  end
-
-  def nonnegative_integer(_value), do: 0
-
   def blank?(nil), do: true
   def blank?(value) when is_binary(value), do: String.trim(value) == ""
   def blank?(_value), do: false
-
-  def truthy?(value), do: value in [true, "true", "1", 1]
 
   defp stats(numeric_stats, text_stats) do
     numeric_stats
@@ -217,12 +178,7 @@ defmodule Egglog.Common do
 
   defp limit_outputs(outputs, nil), do: {outputs, false}
 
-  defp limit_outputs(outputs, limit) do
-    case positive_integer(limit) do
-      nil -> {outputs, false}
-      limit -> {Enum.take(outputs, limit), length(outputs) > limit}
-    end
-  end
+  defp limit_outputs(outputs, limit), do: {Enum.take(outputs, limit), length(outputs) > limit}
 
   defp put_snapshot(result, "", _text, _omitted), do: result
   defp put_snapshot(result, "none", _text, _omitted), do: result
@@ -259,47 +215,68 @@ defmodule Egglog.Common do
   defp render_snapshot(_text, _format, render), do: {:error, {:unsupported_render, render}}
 
   defp render_svg(dot) do
-    dot_path = Path.join(System.tmp_dir!(), "egglog-#{System.unique_integer([:positive])}.dot")
-    svg_path = Path.rootname(dot_path) <> ".svg"
+    # A private directory avoids collisions across concurrent BEAM instances.
+    directory =
+      Path.join(
+        System.tmp_dir!(),
+        "egglog-#{Base.url_encode64(:crypto.strong_rand_bytes(12), padding: false)}"
+      )
+
+    dot_path = Path.join(directory, "graph.dot")
+    svg_path = Path.join(directory, "graph.svg")
 
     try do
-      File.write!(dot_path, dot)
-
-      case System.cmd("dot", ["-Tsvg", dot_path, "-o", svg_path], stderr_to_stdout: true) do
-        {_output, 0} ->
-          svg = File.read!(svg_path)
-          {:ok, %{format: :svg, text: svg, svg: svg, dot: dot}}
-
-        {output, status} ->
-          {:error, {:graphviz_failed, status, output}}
+      with :ok <- File.mkdir(directory),
+           :ok <- File.write(dot_path, dot),
+           {:ok, _} <- run_graphviz(dot_path, svg_path),
+           {:ok, svg} <- File.read(svg_path) do
+        {:ok, %{format: :svg, text: svg, svg: svg, dot: dot}}
+      else
+        {:error, {:graphviz_failed, _, _}} = error -> error
+        {:error, reason} -> {:error, {:snapshot_io, reason}}
       end
+    rescue
+      error in ErlangError -> {:error, {:graphviz_failed, Exception.message(error)}}
     after
-      File.rm(dot_path)
-      File.rm(svg_path)
+      File.rm_rf(directory)
+    end
+  end
+
+  defp run_graphviz(dot_path, svg_path) do
+    case System.cmd("dot", ["-Tsvg", dot_path, "-o", svg_path], stderr_to_stdout: true) do
+      {output, 0} -> {:ok, output}
+      {output, status} -> {:error, {:graphviz_failed, status, output}}
     end
   end
 
   defp write_snapshot_artifacts(snapshot, opts) do
-    snapshot
-    |> maybe_write(:dot_path, snapshot.dot, opts)
-    |> maybe_write(:svg_path, Map.get(snapshot, :svg), opts)
-    |> maybe_write(:json_path, Map.get(snapshot, :json), opts)
-    |> maybe_write(:path, snapshot.text, opts)
-  end
+    Enum.reduce_while(@snapshot_artifact_keys -- [:render], {:ok, snapshot}, fn key,
+                                                                                {:ok, snapshot} ->
+      content =
+        case key do
+          :dot_path -> snapshot.dot
+          :svg_path -> snapshot.svg
+          :json_path -> snapshot.json
+          :path -> snapshot.text
+        end
 
-  defp maybe_write(snapshot, key, content, opts) do
-    case get(opts, key) do
-      nil -> snapshot
-      _path when is_nil(content) -> Map.put(snapshot, key, nil)
-      path -> write_file(snapshot, key, path, content)
-    end
-  end
+      case get(opts, key) do
+        nil ->
+          {:cont, {:ok, snapshot}}
 
-  defp write_file(snapshot, key, path, content) do
-    path = Path.expand(path)
-    File.mkdir_p!(Path.dirname(path))
-    File.write!(path, content)
-    Map.put(snapshot, key, path)
+        _path when is_nil(content) ->
+          {:cont, {:ok, Map.put(snapshot, key, nil)}}
+
+        path ->
+          path = Path.expand(path)
+
+          with :ok <- File.mkdir_p(Path.dirname(path)), :ok <- File.write(path, content) do
+            {:cont, {:ok, Map.put(snapshot, key, path)}}
+          else
+            {:error, reason} -> {:halt, {:error, {:snapshot_io, path, reason}}}
+          end
+      end
+    end)
   end
 
   defp snapshot_format(nil), do: "none"

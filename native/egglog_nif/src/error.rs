@@ -6,6 +6,8 @@ pub enum NativeError {
     Closed(String),
     InvalidTheory(String),
     Native(String),
+    CheckFailed(String),
+    Panic(String),
 }
 
 impl NativeError {
@@ -15,7 +17,21 @@ impl NativeError {
             Self::InvalidTheory(message) => {
                 (atoms::error(), atoms::invalid_theory(), message).encode(env)
             }
+            Self::CheckFailed(message) => {
+                (atoms::error(), atoms::check_failed(), message).encode(env)
+            }
+            Self::Panic(message) => (atoms::error(), atoms::panic(), message).encode(env),
             Self::Native(message) => (atoms::error(), atoms::native_error(), message).encode(env),
+        }
+    }
+}
+
+impl From<egglog::Error> for NativeError {
+    fn from(error: egglog::Error) -> Self {
+        let message = error.to_string();
+        match error {
+            egglog::Error::CheckError(..) => Self::CheckFailed(message),
+            _ => Self::Native(message),
         }
     }
 }

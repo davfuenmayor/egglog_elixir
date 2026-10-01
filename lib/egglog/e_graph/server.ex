@@ -21,7 +21,7 @@ defmodule Egglog.EGraph.Server do
     proofs? = Keyword.fetch!(opts, :proofs?)
 
     case Native.new_egraph(source, proofs?) |> Common.from_native_load() do
-      {:ok, ref} -> {:ok, %{ref: ref}}
+      {:ok, ref} -> {:ok, %{ref: ref, owner: Process.monitor(Keyword.fetch!(opts, :owner))}}
       {:error, reason} -> {:stop, reason}
     end
   end
@@ -44,7 +44,7 @@ defmodule Egglog.EGraph.Server do
       )
       |> Common.from_native_result(output_limit)
 
-    {:reply, result, state}
+    reply(result, state)
   end
 
   def handle_call({:run_parsed, commands_ref, snapshot, output_limit}, _from, %{ref: ref} = state) do
@@ -60,7 +60,7 @@ defmodule Egglog.EGraph.Server do
       )
       |> Common.from_native_result(output_limit)
 
-    {:reply, result, state}
+    reply(result, state)
   end
 
   def handle_call({:eval, expr}, _from, %{ref: ref} = state) do
@@ -69,7 +69,7 @@ defmodule Egglog.EGraph.Server do
       |> Native.eval_egraph(expr)
       |> Common.from_native_value()
 
-    {:reply, result, state}
+    reply(result, state)
   end
 
   def handle_call({:lookup, name, arg_exprs}, _from, %{ref: ref} = state) do
@@ -78,16 +78,29 @@ defmodule Egglog.EGraph.Server do
       |> Native.lookup_egraph(name, arg_exprs)
       |> Common.from_native_lookup()
 
-    {:reply, result, state}
+    reply(result, state)
   end
 
   def handle_call(:num_tuples, _from, %{ref: ref} = state) do
     result = ref |> Native.egraph_num_tuples() |> Common.from_native_count()
-    {:reply, result, state}
+    reply(result, state)
   end
 
   def handle_call(:close, _from, %{ref: ref} = state) do
     result = ref |> Native.close_egraph() |> Common.from_native_close()
-    {:reply, result, %{state | ref: nil}}
+    {:stop, :normal, result, %{state | ref: nil}}
   end
+
+  @impl true
+  def handle_info({:DOWN, monitor, :process, _pid, _reason}, %{owner: monitor} = state),
+    do: {:stop, :normal, state}
+
+  @impl true
+  def terminate(_reason, %{ref: ref}) when not is_nil(ref), do: Native.close_egraph(ref)
+  def terminate(_reason, _state), do: :ok
+
+  defp reply({:error, {:panic, _}} = error, state),
+    do: {:stop, :normal, error, state}
+
+  defp reply(result, state), do: {:reply, result, state}
 end

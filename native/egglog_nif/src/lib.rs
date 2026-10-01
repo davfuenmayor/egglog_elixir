@@ -1,3 +1,6 @@
+// Flat argument lists preserve the native boundary without an extra configuration layer.
+#![allow(clippy::too_many_arguments)]
+
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Mutex;
 use std::time::Instant;
@@ -22,7 +25,9 @@ mod atoms {
         error,
         closed,
         invalid_theory,
-        native_error
+        native_error,
+        check_failed,
+        panic
     }
 }
 
@@ -43,9 +48,7 @@ fn parse_program<'a>(env: Env<'a>, source: String) -> Term<'a> {
 fn load_program<'a>(env: Env<'a>, source: String, proofs: bool) -> Term<'a> {
     respond(env, || {
         let egraph = resources::load_egraph(&source, proofs).map_err(NativeError::InvalidTheory)?;
-        let inner = ProgramInner {
-            base: egraph,
-        };
+        let inner = ProgramInner { base: egraph };
         let resource = ResourceArc::new(ProgramResource {
             inner: Mutex::new(Some(inner)),
         });
@@ -233,7 +236,7 @@ fn lookup_egraph<'a>(
     })
 }
 
-#[rustler::nif]
+#[rustler::nif(schedule = "DirtyCpu")]
 fn program_num_tuples<'a>(env: Env<'a>, program: ResourceArc<ProgramResource>) -> Term<'a> {
     respond(env, || {
         let count = resources::with_program(&program, |inner| {
@@ -243,7 +246,7 @@ fn program_num_tuples<'a>(env: Env<'a>, program: ResourceArc<ProgramResource>) -
     })
 }
 
-#[rustler::nif]
+#[rustler::nif(schedule = "DirtyCpu")]
 fn egraph_num_tuples<'a>(env: Env<'a>, egraph: ResourceArc<EGraphResource>) -> Term<'a> {
     respond(env, || {
         let count = resources::with_egraph(&egraph, |egraph| {
@@ -253,7 +256,7 @@ fn egraph_num_tuples<'a>(env: Env<'a>, egraph: ResourceArc<EGraphResource>) -> T
     })
 }
 
-#[rustler::nif]
+#[rustler::nif(schedule = "DirtyCpu")]
 fn close_program<'a>(env: Env<'a>, program: ResourceArc<ProgramResource>) -> Term<'a> {
     respond(env, || {
         resources::close_program(&program)?;
@@ -261,7 +264,7 @@ fn close_program<'a>(env: Env<'a>, program: ResourceArc<ProgramResource>) -> Ter
     })
 }
 
-#[rustler::nif]
+#[rustler::nif(schedule = "DirtyCpu")]
 fn close_egraph<'a>(env: Env<'a>, egraph: ResourceArc<EGraphResource>) -> Term<'a> {
     respond(env, || {
         resources::close_egraph(&egraph)?;
@@ -273,7 +276,7 @@ fn run_cloned_program<'a>(
     env: Env<'a>,
     program: ResourceArc<ProgramResource>,
     mode: String,
-    fun: impl FnOnce(&mut EGraph, Instant) -> Result<NativeRun, String>,
+    fun: impl FnOnce(&mut EGraph, Instant) -> Result<NativeRun, NativeError>,
 ) -> Term<'a> {
     respond(env, || {
         let mut run =
@@ -283,7 +286,7 @@ fn run_cloned_program<'a>(
     })
 }
 
-fn run_input(egraph: &mut EGraph, source: &str) -> Result<(), String> {
+fn run_input(egraph: &mut EGraph, source: &str) -> Result<(), NativeError> {
     if source.trim().is_empty() {
         Ok(())
     } else {
@@ -291,17 +294,7 @@ fn run_input(egraph: &mut EGraph, source: &str) -> Result<(), String> {
     }
 }
 
-fn native_run_response(
-    run: NativeRun,
-) -> (
-    rustler::Atom,
-    rustler::Atom,
-    Vec<(String, String)>,
-    Vec<(String, i64)>,
-    Vec<(String, String)>,
-    snapshot::NativeSnapshot,
-    Vec<(String, Vec<(String, i64)>)>,
-) {
+fn native_run_response(run: NativeRun) -> impl Encoder {
     let (outputs, numeric_stats, text_stats, snapshot, report) = run;
     (
         atoms::ok(),
@@ -336,7 +329,7 @@ where
     match catch_unwind(AssertUnwindSafe(fun)) {
         Ok(Ok(value)) => value.encode(env),
         Ok(Err(error)) => error.encode(env),
-        Err(payload) => NativeError::Native(error::panic_payload_to_string(payload)).encode(env),
+        Err(payload) => NativeError::Panic(error::panic_payload_to_string(payload)).encode(env),
     }
 }
 

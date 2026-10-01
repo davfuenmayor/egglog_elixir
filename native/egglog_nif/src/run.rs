@@ -1,7 +1,11 @@
+// Flat argument lists preserve the native boundary without an extra configuration layer.
+#![allow(clippy::too_many_arguments)]
+
 use std::time::Instant;
 
 use egglog::{EGraph, ast::Command};
 
+use crate::error::NativeError;
 use crate::report::{add_output_report_stats, collect_reports, output_kind};
 use crate::snapshot::{NativeSnapshot, build_snapshot};
 
@@ -22,13 +26,13 @@ pub fn execute_program(
     snapshot_max_calls_per_function: i64,
     snapshot_inline_leaves: i64,
     snapshot_split_primitive_outputs: bool,
-) -> Result<NativeRun, String> {
+) -> Result<NativeRun, NativeError> {
     let commands = if program.trim().is_empty() {
         Vec::new()
     } else {
         egraph
             .parse_program(None, program)
-            .map_err(|err| err.to_string())?
+            .map_err(|err| NativeError::Native(err.to_string()))?
     };
 
     execute_commands(
@@ -52,13 +56,11 @@ pub fn execute_commands(
     snapshot_max_calls_per_function: i64,
     snapshot_inline_leaves: i64,
     snapshot_split_primitive_outputs: bool,
-) -> Result<NativeRun, String> {
+) -> Result<NativeRun, NativeError> {
     let outputs = if commands.is_empty() {
         Vec::new()
     } else {
-        egraph
-            .run_program(commands)
-            .map_err(|err| err.to_string())?
+        egraph.run_program(commands).map_err(NativeError::from)?
     };
 
     let mut numeric_stats = vec![

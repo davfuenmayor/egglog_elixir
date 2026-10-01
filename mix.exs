@@ -17,7 +17,7 @@ defmodule EgglogElixir.MixProject do
 
   def application do
     [
-      extra_applications: [:logger]
+      extra_applications: [:logger, :crypto]
     ]
   end
 
@@ -25,7 +25,8 @@ defmodule EgglogElixir.MixProject do
     [
       {:jason, "~> 1.4"},
       {:ex_doc, "~> 0.38", only: :dev, runtime: false},
-      {:rustler, "~> 0.38.0", runtime: false}
+      {:rustler, "~> 0.38.0", runtime: false},
+      {:rustler_precompiled, "~> 0.10.0", runtime: false}
     ]
   end
 
@@ -35,6 +36,8 @@ defmodule EgglogElixir.MixProject do
       extras: [
         "README.md",
         "CHANGELOG.md",
+        "API_COVERAGE.md",
+        "KNOWN_ISSUES.md",
         "livebooks/getting_started.livemd",
         "livebooks/egglog-tutorial/README.md",
         "livebooks/egglog-tutorial/01-basics.livemd",
@@ -60,6 +63,9 @@ defmodule EgglogElixir.MixProject do
       files: [
         ".formatter.exs",
         "CHANGELOG.md",
+        "API_COVERAGE.md",
+        "KNOWN_ISSUES.md",
+        "checksum-Elixir.Egglog.Native.exs",
         "LICENSE",
         "README.md",
         "lib",
@@ -67,7 +73,9 @@ defmodule EgglogElixir.MixProject do
         "mix.exs",
         "native/egglog_nif/Cargo.lock",
         "native/egglog_nif/Cargo.toml",
-        "native/egglog_nif/src"
+        "native/egglog_nif/src",
+        "native/egglog_nif/LICENSE-EGGLOG-MIT",
+        "scripts"
       ]
     ]
   end

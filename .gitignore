@@ -38,3 +38,7 @@ livebook_uploads/
 # OS files
 .DS_Store
 Thumbs.db
+
+# Locally generated precompiled release archives
+/dist/
+/.expert/

@@ -18,16 +18,9 @@ defmodule Egglog.Commands do
   @enforce_keys [:ref, :count]
   defstruct [:ref, :count, :source]
 
-  @opaque t :: %__MODULE__{
-            ref: reference(),
-            count: non_neg_integer(),
-            source: String.t() | nil
-          }
-
   @doc """
   Parses egglog source into a reusable command handle.
   """
-  @spec parse(String.t()) :: {:ok, t()} | {:error, term()}
   def parse(source) when is_binary(source) do
     case Native.parse_program(source) do
       {:ok, ref, count} -> {:ok, %__MODULE__{ref: ref, count: count, source: source}}
@@ -38,7 +31,6 @@ defmodule Egglog.Commands do
   @doc """
   Bang variant of `parse/1`.
   """
-  @spec parse!(String.t()) :: t()
   def parse!(source) when is_binary(source) do
     source
     |> parse()

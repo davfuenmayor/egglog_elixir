@@ -15,6 +15,18 @@ defmodule Egglog.EGraph do
   This is intentionally different from `Egglog.Program.run/3`, which runs each
   query against a native clone of a loaded base program.
 
+  The server monitors the creating process and closes when it exits, normally
+  or abnormally. Other processes may call the shared handle while its creator
+  lives. Calls use an infinite timeout because native runs cannot be cancelled
+  by a GenServer timeout; finite waiting would not stop mutation or free the
+  server for another request.
+
+  Failed native commands can leave earlier changes in place; the wrapper does
+  not add transactions. Use native `push/2` and `pop/2` for rollback points.
+  A caught panic discards the mutable graph and stops the server. Further calls
+  return `{:error, {:closed, message}}`. Validation errors occur before execution.
+  Run outputs and decoded values have the same shapes as `Egglog.Program`.
+
   `push/2` and `pop/2` delegate to native egglog's `(push)` and `(pop)`
   commands. They are useful for temporary experiments:
 
@@ -26,13 +38,11 @@ defmodule Egglog.EGraph do
   list of `%{type: atom(), text: String.t()}` maps and stats are a compact map.
   """
 
-  alias Egglog.{Commands, Common}
+  alias Egglog.{Commands, Common, Options}
   alias Egglog.EGraph.Server
 
   @enforce_keys [:pid]
   defstruct [:pid, name: nil]
-
-  @opaque t :: %__MODULE__{pid: pid(), name: String.t() | nil}
 
   @snapshot_doc """
   Builds a snapshot of the current mutable e-graph.
@@ -56,16 +66,15 @@ defmodule Egglog.EGraph do
 
     * `:snapshot_max_functions` - value passed to native egglog's
       `SerializeConfig.max_functions`. Defaults to `0`. Values greater than
-      `0` become `Some(value)`; `0` and invalid values become `None`.
+      `0` become `Some(value)`; `0` becomes `None`; invalid values return an error.
 
     * `:snapshot_max_calls_per_function` - value passed to native egglog's
       `SerializeConfig.max_calls_per_function`. Defaults to `0`. Values
-      greater than `0` become `Some(value)`; `0` and invalid values become
-      `None`.
+      greater than `0` become `Some(value)`; `0` becomes `None`; invalid values return an error.
 
     * `:snapshot_inline_leaves` - number of native leaf-inlining passes to use
       on the serialized snapshot before producing DOT or JSON text. Defaults
-      to `0`. Negative or invalid values behave like `0`.
+      to `0`. Negative or invalid values return an error.
 
     * `:snapshot_split_primitive_outputs` - whether the native serialized
       snapshot should split primitive outputs into separate classes before
@@ -119,7 +128,7 @@ defmodule Egglog.EGraph do
 
     * `:output_limit` - maximum number of native command outputs to keep in
       the returned `:outputs` list. Defaults to unset, meaning all outputs are
-      kept. Values must be positive integers; invalid values are ignored. When
+      kept. Values must be positive integers; invalid values return an error. When
       outputs are truncated, the returned result has `status: :limit`.
 
     * `:snapshot` - request a native snapshot after the input has run.
@@ -146,7 +155,7 @@ defmodule Egglog.EGraph do
 
     * `:snapshot_inline_leaves` - number of native leaf-inlining passes to use
       on the serialized snapshot before producing DOT or JSON text. Defaults
-      to `0`. Negative or invalid values behave like `0`.
+      to `0`. Negative or invalid values return an error.
 
     * `:snapshot_split_primitive_outputs` - whether the native serialized
       snapshot should split primitive outputs into separate classes before
@@ -187,50 +196,19 @@ defmodule Egglog.EGraph do
 
   All `run/3` options are also accepted and passed through to the internal
   extract run. Defaults are the `run/3` defaults. Snapshot and output options
-  may affect the internal run, but `extract/3` returns only the extracted text.
+  may affect the internal run, but `extract/3` returns only the last extraction text. Missing or truncated extraction output returns an error.
 
   String option keys are also accepted, matching the rest of the wrapper.
   """
 
-  @typedoc """
-  Raw or parsed egglog commands accepted by `run/3`.
-  """
-  @type input :: String.t() | [String.t()] | Commands.t()
-
-  @typedoc """
-  Decoded value returned by `eval/2` and `lookup/3`.
-
-  `:value` contains a native egglog e-class value rendered as text. Primitive
-  egglog values are decoded to ordinary Elixir values when possible:
-  integers, floats, booleans, strings, and `nil` for unit.
-  """
-  @type value :: %{
-          required(:sort) => String.t(),
-          required(:type) => atom(),
-          required(:value) => term()
-        }
-
-  @typedoc """
-  Result returned by `run/3`.
-  """
-  @type run_result :: %{
-          required(:status) => atom(),
-          required(:outputs) => [%{required(:type) => atom(), required(:text) => String.t()}],
-          required(:stats) => map(),
-          required(:report) => map(),
-          optional(:snapshot) => map()
-        }
-
   @doc """
   Parses egglog source into a reusable command handle.
   """
-  @spec parse(String.t()) :: {:ok, Commands.t()} | {:error, term()}
   defdelegate parse(source), to: Commands
 
   @doc """
   Bang variant of `parse/1`.
   """
-  @spec parse!(String.t()) :: Commands.t()
   defdelegate parse!(source), to: Commands
 
   @doc """
@@ -247,41 +225,65 @@ defmodule Egglog.EGraph do
 
     * `:proofs` - create the native e-graph with proof support enabled.
       Defaults to `false`. Truthy values are `true`, `"true"`, `"1"`, and `1`;
-      all other values are treated as false.
+      False values are `false`, `"false"`, `"0"`, and `0`; other values return an error.
 
   String option keys are also accepted, matching the rest of the wrapper.
   """
-  @spec new(String.t(), keyword() | map()) :: {:ok, t()} | {:error, term()}
   def new(source \\ "", opts \\ []) when is_binary(source) do
-    opts = Common.option_map(opts)
-    proofs? = Common.truthy?(Common.get(opts, :proofs, false))
+    Options.with_options(opts, :graph_load, fn opts ->
+      proofs? = Common.get(opts, :proofs, false)
 
-    with {:ok, pid} <- Server.start(source: source, proofs?: proofs?) do
-      Process.link(pid)
-      {:ok, %__MODULE__{pid: pid, name: Common.get(opts, :name)}}
+      with {:ok, pid} <- Server.start(source: source, proofs?: proofs?, owner: self()) do
+        {:ok, %__MODULE__{pid: pid, name: Common.get(opts, :name)}}
+      end
+    end)
+  end
+
+  @doc """
+  Creates a graph, returns `fun.(graph)`, and closes it in `after`, including
+  when the callback raises or throws. Creation errors are returned unchanged.
+  """
+  def with_egraph(fun) when is_function(fun, 1), do: with_egraph("", fun, [])
+
+  @doc "Runs a scoped callback with creation options, or with initial source and default options."
+  def with_egraph(fun, opts) when is_function(fun, 1), do: with_egraph("", fun, opts)
+
+  def with_egraph(source, fun) when is_binary(source) and is_function(fun, 1),
+    do: with_egraph(source, fun, [])
+
+  @doc "Loads initial source, runs a scoped callback, and closes the graph even on callback failure."
+  def with_egraph(source, fun, opts) when is_binary(source) and is_function(fun, 1) do
+    with {:ok, graph} <- new(source, opts) do
+      try do
+        fun.(graph)
+      after
+        close(graph)
+      end
     end
   end
 
   @doc @run_doc
-  @spec run(t(), input(), keyword() | map()) :: {:ok, run_result()} | {:error, term()}
   def run(egraph, input, opts \\ [])
 
   def run(%__MODULE__{} = egraph, %Commands{} = commands, opts) do
-    opts = Common.option_map(opts)
-    snapshot = Common.snapshot_options(opts)
+    Options.with_options(opts, :graph_run, fn opts ->
+      snapshot = Common.snapshot_options(opts)
 
-    Server.call(
-      egraph.pid,
-      {:run_parsed, commands.ref, snapshot, Common.get(opts, :output_limit)}
-    )
+      Server.call(
+        egraph.pid,
+        {:run_parsed, commands.ref, snapshot, Common.get(opts, :output_limit)}
+      )
+    end)
   end
 
   def run(%__MODULE__{pid: pid}, input, opts) do
-    opts = Common.option_map(opts)
-    program = normalize_input(input)
-    snapshot = Common.snapshot_options(opts)
-
-    Server.call(pid, {:run, program, snapshot, Common.get(opts, :output_limit)})
+    Options.with_options(opts, :graph_run, fn opts ->
+      with {:ok, %{source: source}} <- graph_input(input) do
+        program = source
+        snapshot = Common.snapshot_options(opts)
+        Server.call(pid, {:run, program, snapshot, Common.get(opts, :output_limit)})
+      end
+    end)
   end
 
   @doc """
@@ -289,9 +291,8 @@ defmodule Egglog.EGraph do
 
   #{@run_doc}
 
-  Raises if native egglog rejects the input or any option validation raises.
+  Raises if native egglog rejects the input or an option is invalid.
   """
-  @spec run!(t(), input(), keyword() | map()) :: run_result()
   def run!(%__MODULE__{} = egraph, input, opts \\ []) do
     egraph
     |> run(input, opts)
@@ -299,7 +300,6 @@ defmodule Egglog.EGraph do
   end
 
   @doc @check_doc
-  @spec check(t(), String.t(), keyword() | map()) :: {:ok, boolean()} | {:error, term()}
   def check(%__MODULE__{} = egraph, fact, opts \\ []) when is_binary(fact) do
     egraph
     |> run("(check #{fact})", opts)
@@ -314,7 +314,6 @@ defmodule Egglog.EGraph do
   Raises on non-check errors so syntax/type/native errors are not silently
   treated as false mathematical assertions.
   """
-  @spec check?(t(), String.t(), keyword() | map()) :: boolean()
   def check?(%__MODULE__{} = egraph, fact, opts \\ []) do
     egraph
     |> check(fact, opts)
@@ -328,7 +327,6 @@ defmodule Egglog.EGraph do
   internal `(fail (check ...))` run. Defaults are therefore the `run/3`
   defaults. Only `:ok` or `{:error, reason}` is returned.
   """
-  @spec check_fail(t(), String.t(), keyword() | map()) :: :ok | {:error, term()}
   def check_fail(%__MODULE__{} = egraph, fact, opts \\ []) when is_binary(fact) do
     egraph
     |> run("(fail (check #{fact}))", opts)
@@ -336,11 +334,12 @@ defmodule Egglog.EGraph do
   end
 
   @doc @extract_doc
-  @spec extract(t(), String.t(), keyword() | map()) :: {:ok, String.t()} | {:error, term()}
   def extract(%__MODULE__{} = egraph, expr, opts \\ []) when is_binary(expr) do
-    egraph
-    |> run(Common.extract_request(expr, opts), opts)
-    |> Common.extraction()
+    Options.with_options(opts, :graph_extract, fn opts ->
+      egraph
+      |> run(Common.extract_request(expr, opts), Map.delete(opts, :variants))
+      |> Common.extraction()
+    end)
   end
 
   @doc """
@@ -351,7 +350,6 @@ defmodule Egglog.EGraph do
   Raises if native egglog rejects the input or extraction output is not
   available.
   """
-  @spec extract!(t(), String.t(), keyword() | map()) :: String.t()
   def extract!(%__MODULE__{} = egraph, expr, opts \\ []) do
     egraph
     |> extract(expr, opts)
@@ -364,7 +362,6 @@ defmodule Egglog.EGraph do
   Primitive values are decoded into Elixir values. Non-primitive e-class values
   are returned with `type: :value`.
   """
-  @spec eval(t(), String.t()) :: {:ok, value()} | {:error, term()}
   def eval(%__MODULE__{pid: pid}, expr) when is_binary(expr) do
     Server.call(pid, {:eval, expr})
   end
@@ -372,7 +369,6 @@ defmodule Egglog.EGraph do
   @doc """
   Bang variant of `eval/2`.
   """
-  @spec eval!(t(), String.t()) :: value()
   def eval!(%__MODULE__{} = egraph, expr) do
     egraph
     |> eval(expr)
@@ -384,16 +380,16 @@ defmodule Egglog.EGraph do
 
   Returns `{:ok, nil}` when no row exists for the evaluated key.
   """
-  @spec lookup(t(), String.t(), [String.t()]) :: {:ok, value() | nil} | {:error, term()}
   def lookup(%__MODULE__{pid: pid}, name, arg_exprs)
       when is_binary(name) and is_list(arg_exprs) do
-    Server.call(pid, {:lookup, name, arg_exprs})
+    if Enum.all?(arg_exprs, &is_binary/1),
+      do: Server.call(pid, {:lookup, name, arg_exprs}),
+      else: {:error, {:invalid_option, "lookup arguments must be source strings"}}
   end
 
   @doc """
   Bang variant of `lookup/3`.
   """
-  @spec lookup!(t(), String.t(), [String.t()]) :: value() | nil
   def lookup!(%__MODULE__{} = egraph, name, arg_exprs) do
     egraph
     |> lookup(name, arg_exprs)
@@ -406,11 +402,10 @@ defmodule Egglog.EGraph do
   `count` defaults to `1`. This corresponds to `(push)` for `1`, or
   `(push count)` for larger counts.
   """
-  @spec push(t(), pos_integer()) :: :ok | {:error, term()}
   def push(%__MODULE__{} = egraph, count \\ 1) do
-    stack_command("push", count)
-    |> then(&run(egraph, &1))
-    |> Common.ok_only()
+    with {:ok, %{count: count}} <- Options.validate([count: count], [:count]) do
+      egraph |> run(stack_command("push", count)) |> Common.ok_only()
+    end
   end
 
   @doc """
@@ -418,23 +413,22 @@ defmodule Egglog.EGraph do
 
   `count` defaults to `1`. Popping too much returns an error from native egglog.
   """
-  @spec pop(t(), pos_integer()) :: :ok | {:error, term()}
   def pop(%__MODULE__{} = egraph, count \\ 1) do
-    stack_command("pop", count)
-    |> then(&run(egraph, &1))
-    |> Common.ok_only()
+    with {:ok, %{count: count}} <- Options.validate([count: count], [:count]) do
+      egraph |> run(stack_command("pop", count)) |> Common.ok_only()
+    end
   end
 
   @doc @snapshot_doc
-  @spec snapshot(t(), keyword() | map()) :: {:ok, map()} | {:error, term()}
   def snapshot(%__MODULE__{} = egraph, opts \\ []) do
-    opts = Common.option_map(opts)
-    {render, run_opts} = Common.snapshot_run_opts(opts)
+    Options.with_options(opts, :graph_snapshot, fn opts ->
+      {render, run_opts} = Common.snapshot_run_opts(opts)
 
-    with {:ok, result} <- run(egraph, "", run_opts),
-         {:ok, snapshot} <- Common.snapshot_from_result(result, opts, render) do
-      {:ok, snapshot}
-    end
+      with {:ok, result} <- run(egraph, "", run_opts),
+           {:ok, snapshot} <- Common.snapshot_from_result(result, opts, render) do
+        {:ok, snapshot}
+      end
+    end)
   end
 
   @doc """
@@ -445,7 +439,6 @@ defmodule Egglog.EGraph do
   Raises if snapshot serialization, Graphviz rendering, or artifact writing
   fails.
   """
-  @spec snapshot!(t(), keyword() | map()) :: map()
   def snapshot!(%__MODULE__{} = egraph, opts \\ []) do
     egraph
     |> snapshot(opts)
@@ -459,7 +452,6 @@ defmodule Egglog.EGraph do
   database-size counter, not a graph summary. For node/class counts,
   visualization, or JSON inspection, use `snapshot/2`.
   """
-  @spec num_tuples(t()) :: {:ok, non_neg_integer()} | {:error, term()}
   def num_tuples(%__MODULE__{pid: pid}) do
     Server.call(pid, :num_tuples)
   end
@@ -467,29 +459,25 @@ defmodule Egglog.EGraph do
   @doc """
   Closes the native mutable e-graph and stops the session process.
   """
-  @spec close(t()) :: :ok | {:error, term()}
-  def close(%__MODULE__{pid: pid} = egraph) do
+  def close(%__MODULE__{pid: pid}) do
+    monitor = Process.monitor(pid)
     result = Server.call(pid, :close)
-    stop(egraph)
-    result
-  end
 
-  defp stop(%__MODULE__{pid: pid}) do
-    if Process.alive?(pid) do
-      GenServer.stop(pid, :normal, :infinity)
+    receive do
+      {:DOWN, ^monitor, :process, ^pid, _reason} -> result
     end
-  catch
-    :exit, _reason -> :ok
   end
 
-  defp stack_command(_name, count) when not is_integer(count) or count < 1 do
-    raise ArgumentError, "push/pop count must be a positive integer"
+  defp graph_input(input) when is_binary(input), do: {:ok, %{source: input}}
+
+  defp graph_input(input) when is_list(input) do
+    with {:ok, %{commands: commands}} <- Options.input(input) do
+      {:ok, %{source: Common.join_commands(commands)}}
+    end
   end
+
+  defp graph_input(_), do: {:error, {:invalid_option, "graph input must be source or commands"}}
 
   defp stack_command(name, 1), do: "(#{name})"
   defp stack_command(name, count), do: "(#{name} #{count})"
-
-  defp normalize_input(input) when is_binary(input), do: input
-
-  defp normalize_input(commands) when is_list(commands), do: Common.join_commands(commands)
 end

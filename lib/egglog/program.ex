@@ -7,102 +7,27 @@ defmodule Egglog.Program do
   facts. Each `run/3` call clones that base inside native egglog and executes
   the supplied input as query-local work.
 
-  Concurrent calls against the same `Program` are safe and query-local, but
-  they are serialized by that native resource. This protects the loaded base
-  and the clone/run operation for one handle without introducing a process-wide
-  lock or an Elixir worker pool. Load multiple `Program` handles explicitly
-  when you need parallel throughput.
+  Concurrent calls against one program are serialized by its native resource,
+  including clone-local execution. Runs use dirty CPU schedulers; independent
+  program handles can execute concurrently. Closing waits for an active call.
+  No worker pool or global lock is introduced.
+
+  `run/3` returns `{:ok, %{status: status, outputs: outputs, stats: stats,
+  report: report}}`, optionally including a snapshot. Each output has `:type`
+  and native `:text`. `:limit` means returned output was truncated, not that
+  execution stopped. `eval/4` and `lookup/5` return values with `:sort`, `:type`
+  and `:value`; primitive values are decoded, other native values remain text.
+  Big integers and rationals retain their exact string representations.
+
+  Invalid options return `{:error, {:invalid_option, message}}` before execution.
+  Native errors retain their text. Failed checks use `:check_failed`; caught
+  panics use `:panic`. A panic in a query-local clone does not mutate the base.
   """
 
-  alias Egglog.{Commands, Common, Native}
+  alias Egglog.{Commands, Common, Native, Options}
 
   @enforce_keys [:ref]
   defstruct [:ref, modes: %{}, default_budget: %{rounds: 0}, name: nil]
-
-  @opaque t :: %__MODULE__{
-            ref: reference(),
-            modes: %{optional(atom() | String.t()) => String.t()},
-            default_budget: map(),
-            name: String.t() | nil
-          }
-
-  @typedoc """
-  Decoded value returned by `eval/4` and `lookup/5`.
-
-  `:value` contains a native egglog e-class value rendered as text. Primitive
-  egglog values are decoded to ordinary Elixir values when possible:
-  integers, floats, booleans, strings, and `nil` for unit.
-  """
-  @type value :: %{
-          required(:sort) => String.t(),
-          required(:type) => atom(),
-          required(:value) => term()
-        }
-
-  @typedoc """
-  One output-producing egglog request.
-
-  A request may be written directly as an egglog command string, or as a small
-  Elixir map that the wrapper renders to native egglog syntax.
-  """
-  @type request ::
-          String.t()
-          | %{required(:type) => :check, required(:expr) => String.t()}
-          | %{
-              required(:type) => :extract,
-              required(:expr) => String.t(),
-              optional(:variants) => pos_integer(),
-              optional(:limit) => pos_integer()
-            }
-          | %{required(:type) => :print_size, optional(:name) => String.t()}
-          | %{
-              required(:type) => :print_function,
-              required(:name) => String.t(),
-              optional(:limit) => pos_integer()
-            }
-          | %{optional(String.t()) => term()}
-
-  @typedoc """
-  Query-local input for `run/3`, `check/4`, `extract/4`, `eval/4`, and
-  `lookup/5`.
-
-  Strings are passed as raw egglog source. Lists are joined as egglog commands.
-  Parsed `Egglog.Commands` handles can be reused when the same source is run or
-  inspected repeatedly. Maps let Elixir code build common egglog commands
-  without string concatenation.
-  """
-  @type input ::
-          %{
-            optional(:source) => String.t(),
-            optional(:program) => String.t(),
-            optional(:commands) => [String.t()],
-            optional(:facts) => [String.t()],
-            optional(:terms) => %{String.t() => String.t()},
-            optional(:sets) => [{String.t(), String.t()}],
-            optional(:unions) => [{String.t(), String.t()}],
-            optional(:requests) => [request()],
-            optional(:schedule) => String.t(),
-            optional(:snapshot) => :dot | :json | :none | String.t() | boolean(),
-            optional(:snapshot_max_functions) => non_neg_integer(),
-            optional(:snapshot_max_calls_per_function) => non_neg_integer(),
-            optional(:snapshot_inline_leaves) => non_neg_integer(),
-            optional(:snapshot_split_primitive_outputs) => boolean(),
-            optional(:mode) => atom() | String.t(),
-            optional(:budget) => map()
-          }
-          | %{optional(String.t()) => term()}
-          | Commands.t()
-
-  @typedoc """
-  Result returned by `run/3`.
-  """
-  @type run_result :: %{
-          required(:status) => atom(),
-          required(:outputs) => [%{required(:type) => atom(), required(:text) => String.t()}],
-          required(:stats) => map(),
-          required(:report) => map(),
-          optional(:snapshot) => map()
-        }
 
   @load_doc """
   Loads a static egglog program into a reusable native handle.
@@ -117,7 +42,7 @@ defmodule Egglog.Program do
 
     * `:proofs` - create the native e-graph with proof support enabled.
       Defaults to `false`. Truthy values are `true`, `"true"`, `"1"`, and `1`;
-      all other values are treated as false.
+      False values are `false`, `"false"`, `"0"`, and `0`; other values return an error.
 
     * `:modes` - map from mode names to egglog schedule forms or commands.
       Defaults to `%{}`. During `run/3`, the selected `:mode` is looked up by
@@ -184,7 +109,7 @@ defmodule Egglog.Program do
     * `:output_limit` - maximum number of native command outputs to keep in
       the returned `:outputs` list. Defaults to `budget[:output_limit]` for
       non-parsed inputs and unset for parsed command handles. Values must be
-      positive integers; invalid values are ignored. When outputs are
+      positive integers; invalid values return an error. When outputs are
       truncated, the returned result has `status: :limit`.
 
     * `:snapshot` - request a native snapshot after the input has run.
@@ -202,18 +127,17 @@ defmodule Egglog.Program do
     * `:snapshot_max_functions` - value passed to native egglog's
       `SerializeConfig.max_functions` when `:snapshot` is enabled. Defaults to
       input `:snapshot_max_functions`, then `0`. Values greater than `0` become
-      `Some(value)`; `0` and invalid values become `None`.
+      `Some(value)`; `0` becomes `None`; invalid values return an error.
 
     * `:snapshot_max_calls_per_function` - value passed to native egglog's
       `SerializeConfig.max_calls_per_function` when `:snapshot` is enabled.
       Defaults to input `:snapshot_max_calls_per_function`, then `0`. Values
-      greater than `0` become `Some(value)`; `0` and invalid values become
-      `None`.
+      greater than `0` become `Some(value)`; `0` becomes `None`; invalid values return an error.
 
     * `:snapshot_inline_leaves` - number of native leaf-inlining passes to use
       on the serialized snapshot before producing DOT or JSON text. Defaults
       to input `:snapshot_inline_leaves`, then `0`. Negative or invalid values
-      behave like `0`.
+      return an error.
 
     * `:snapshot_split_primitive_outputs` - whether the native serialized
       snapshot should split primitive outputs into separate classes before
@@ -278,7 +202,7 @@ defmodule Egglog.Program do
   All `run/3` options are also accepted and passed through after appending the
   extract request to the input. Defaults are the `run/3` defaults. Snapshot and
   output options may affect the internal run, but `extract/4` returns only the
-  extracted text.
+  last extraction text. Missing or truncated extraction output returns an error.
 
   String option keys are also accepted, matching the rest of the wrapper.
   """
@@ -320,17 +244,17 @@ defmodule Egglog.Program do
     * `:snapshot_max_functions` - value passed to native egglog's
       `SerializeConfig.max_functions`. Defaults to input
       `:snapshot_max_functions`, then `0`. Values greater than `0` become
-      `Some(value)`; `0` and invalid values become `None`.
+      `Some(value)`; `0` becomes `None`; invalid values return an error.
 
     * `:snapshot_max_calls_per_function` - value passed to native egglog's
       `SerializeConfig.max_calls_per_function`. Defaults to input
       `:snapshot_max_calls_per_function`, then `0`. Values greater than `0`
-      become `Some(value)`; `0` and invalid values become `None`.
+      become `Some(value)`; `0` becomes `None`; invalid values return an error.
 
     * `:snapshot_inline_leaves` - number of native leaf-inlining passes to use
       on the serialized snapshot before producing DOT or JSON text. Defaults
       to input `:snapshot_inline_leaves`, then `0`. Negative or invalid values
-      behave like `0`.
+      return an error.
 
     * `:snapshot_split_primitive_outputs` - whether the native serialized
       snapshot should split primitive outputs into separate classes before
@@ -374,31 +298,45 @@ defmodule Egglog.Program do
   sequence is executed repeatedly; native egglog parsing happens once, while
   execution still happens against a fresh clone of the loaded base program.
   """
-  @spec parse(String.t()) :: {:ok, Commands.t()} | {:error, term()}
   defdelegate parse(source), to: Commands
 
   @doc """
   Bang variant of `parse/1`.
   """
-  @spec parse!(String.t()) :: Commands.t()
   defdelegate parse!(source), to: Commands
 
-  @doc @load_doc
-  @spec load(String.t() | map(), keyword() | map()) :: {:ok, t()} | {:error, term()}
-  def load(theory_spec, opts \\ []) do
-    opts = Common.option_map(opts)
-    source = source_from(theory_spec)
-    proofs? = Common.truthy?(Common.get(opts, :proofs, false))
-
-    with {:ok, ref} <- Native.load_program(source, proofs?) |> Common.from_native_load() do
-      {:ok,
-       %__MODULE__{
-         ref: ref,
-         modes: normalize_map(Common.get(opts, :modes, %{})),
-         default_budget: normalize_map(Common.get(opts, :default_budget, %{})),
-         name: Common.get(opts, :name)
-       }}
+  @doc """
+  Loads a program, returns `fun.(program)`, and closes it in `after`, including
+  when the callback raises or throws. Load errors are returned unchanged.
+  """
+  def with_program(source, fun, opts \\ []) when is_function(fun, 1) do
+    with {:ok, program} <- load(source, opts) do
+      try do
+        fun.(program)
+      after
+        close(program)
+      end
     end
+  end
+
+  @doc @load_doc
+  def load(theory_spec, opts \\ []) do
+    Options.with_options(opts, :program_load, fn opts ->
+      theory = if is_binary(theory_spec), do: %{source: theory_spec}, else: theory_spec
+
+      with {:ok, theory} <- Options.validate(theory, [:source, :program]),
+           {:ok, ref} <-
+             Native.load_program(source_from(theory), Common.get(opts, :proofs, false))
+             |> Common.from_native_load() do
+        {:ok,
+         %__MODULE__{
+           ref: ref,
+           modes: Common.get(opts, :modes, %{}),
+           default_budget: Common.get(opts, :default_budget, %{}),
+           name: Common.get(opts, :name)
+         }}
+      end
+    end)
   end
 
   @doc """
@@ -408,7 +346,6 @@ defmodule Egglog.Program do
 
   Raises if native egglog rejects the loaded theory.
   """
-  @spec load!(String.t() | map(), keyword() | map()) :: t()
   def load!(theory_spec, opts \\ []) do
     theory_spec
     |> load(opts)
@@ -416,49 +353,51 @@ defmodule Egglog.Program do
   end
 
   @doc @run_doc
-  @spec run(t(), input(), keyword() | map()) :: {:ok, run_result()} | {:error, term()}
   def run(program, input, opts \\ [])
 
   def run(%__MODULE__{} = program, %Commands{} = commands, opts) do
-    opts = Common.option_map(opts)
-    mode = Common.get(opts, :mode, :default)
-    snapshot = Common.snapshot_options(opts)
+    Options.with_options(opts, :program_run, fn opts ->
+      mode = Common.get(opts, :mode, :default)
+      snapshot = Common.snapshot_options(opts)
 
-    program.ref
-    |> Native.run_parsed_program(
-      commands.ref,
-      to_string(mode || :default),
-      snapshot.format,
-      snapshot.max_functions,
-      snapshot.max_calls_per_function,
-      snapshot.inline_leaves,
-      snapshot.split_primitive_outputs?
-    )
-    |> Common.from_native_result(Common.get(opts, :output_limit))
+      program.ref
+      |> Native.run_parsed_program(
+        commands.ref,
+        to_string(mode || :default),
+        snapshot.format,
+        snapshot.max_functions,
+        snapshot.max_calls_per_function,
+        snapshot.inline_leaves,
+        snapshot.split_primitive_outputs?
+      )
+      |> Common.from_native_result(Common.get(opts, :output_limit))
+    end)
   end
 
   def run(%__MODULE__{} = program, input, opts) do
-    opts = Common.option_map(opts)
-    input_map = normalize_input(input)
-    budget = budget(program, input_map, opts)
-    mode = mode(input_map, opts)
-    source = build_run_source(program, input_map, budget, mode)
+    Options.with_options(opts, :program_run, fn opts ->
+      with {:ok, input_map} <- Options.input(input) do
+        budget = budget(program, input_map, opts)
+        mode = mode(input_map, opts)
+        source = build_run_source(program, input_map, budget, mode)
 
-    output_limit = Common.get(opts, :output_limit, Common.get(budget, :output_limit))
+        output_limit = Common.get(opts, :output_limit, Common.get(budget, :output_limit))
 
-    snapshot = Common.snapshot_options(opts, input_map)
+        snapshot = Common.snapshot_options(opts, input_map)
 
-    program.ref
-    |> Native.run_program(
-      source,
-      to_string(mode || :default),
-      snapshot.format,
-      snapshot.max_functions,
-      snapshot.max_calls_per_function,
-      snapshot.inline_leaves,
-      snapshot.split_primitive_outputs?
-    )
-    |> Common.from_native_result(output_limit)
+        program.ref
+        |> Native.run_program(
+          source,
+          to_string(mode || :default),
+          snapshot.format,
+          snapshot.max_functions,
+          snapshot.max_calls_per_function,
+          snapshot.inline_leaves,
+          snapshot.split_primitive_outputs?
+        )
+        |> Common.from_native_result(output_limit)
+      end
+    end)
   end
 
   @doc """
@@ -466,9 +405,8 @@ defmodule Egglog.Program do
 
   #{@run_doc}
 
-  Raises if native egglog rejects the input or any option validation raises.
+  Raises if native egglog rejects the input or an option is invalid.
   """
-  @spec run!(t(), input(), keyword() | map()) :: run_result()
   def run!(%__MODULE__{} = program, input, opts \\ []) do
     program
     |> run(input, opts)
@@ -476,11 +414,9 @@ defmodule Egglog.Program do
   end
 
   @doc @program_check_doc
-  @spec check(t(), input(), String.t(), keyword() | map()) ::
-          {:ok, boolean()} | {:error, term()}
   def check(%__MODULE__{} = program, input, fact, opts \\ []) when is_binary(fact) do
     program
-    |> run(append_request(input, "(check #{fact})"), opts)
+    |> run_request(input, "(check #{fact})", opts)
     |> Common.check_result()
   end
 
@@ -492,7 +428,6 @@ defmodule Egglog.Program do
   It raises on non-check errors so syntax/type mistakes are not silently treated
   as false mathematical assertions.
   """
-  @spec check?(t(), input(), String.t(), keyword() | map()) :: boolean()
   def check?(%__MODULE__{} = program, input, fact, opts \\ []) do
     program
     |> check(input, fact, opts)
@@ -510,20 +445,23 @@ defmodule Egglog.Program do
   Defaults are therefore the `run/3` defaults. Only `:ok` or `{:error, reason}`
   is returned.
   """
-  @spec check_fail(t(), input(), String.t(), keyword() | map()) :: :ok | {:error, term()}
   def check_fail(%__MODULE__{} = program, input, fact, opts \\ []) when is_binary(fact) do
     program
-    |> run(append_request(input, "(fail (check #{fact}))"), opts)
+    |> run_request(input, "(fail (check #{fact}))", opts)
     |> Common.ok_only()
   end
 
   @doc @program_extract_doc
-  @spec extract(t(), input(), String.t(), keyword() | map()) ::
-          {:ok, String.t()} | {:error, term()}
   def extract(%__MODULE__{} = program, input, expr, opts \\ []) when is_binary(expr) do
-    program
-    |> run(append_request(input, Common.extract_request(expr, opts)), opts)
-    |> Common.extraction()
+    Options.with_options(opts, :program_extract, fn opts ->
+      program
+      |> run_request(
+        input,
+        Common.extract_request(expr, opts),
+        Map.delete(opts, :variants)
+      )
+      |> Common.extraction()
+    end)
   end
 
   @doc """
@@ -534,7 +472,6 @@ defmodule Egglog.Program do
   Raises if native egglog rejects the input or extraction output is not
   available.
   """
-  @spec extract!(t(), input(), String.t(), keyword() | map()) :: String.t()
   def extract!(%__MODULE__{} = program, input, expr, opts \\ []) do
     program
     |> extract(input, expr, opts)
@@ -549,13 +486,12 @@ defmodule Egglog.Program do
 
   #{@program_query_opts_doc}
   """
-  @spec eval(t(), input(), String.t(), keyword() | map()) :: {:ok, value()} | {:error, term()}
   def eval(%__MODULE__{} = program, input, expr, opts \\ []) when is_binary(expr) do
-    opts = Common.option_map(opts)
-
-    program.ref
-    |> Native.eval_program(run_source(program, input, opts), expr)
-    |> Common.from_native_value()
+    Options.with_options(opts, :program_query, fn opts ->
+      with {:ok, source} <- run_source(program, input, opts) do
+        program.ref |> Native.eval_program(source, expr) |> Common.from_native_value()
+      end
+    end)
   end
 
   @doc """
@@ -567,7 +503,6 @@ defmodule Egglog.Program do
 
   Raises if native egglog rejects the query-local input or expression.
   """
-  @spec eval!(t(), input(), String.t(), keyword() | map()) :: value()
   def eval!(%__MODULE__{} = program, input, expr, opts \\ []) do
     program
     |> eval(input, expr, opts)
@@ -581,15 +516,19 @@ defmodule Egglog.Program do
 
   #{@program_query_opts_doc}
   """
-  @spec lookup(t(), input(), String.t(), [String.t()], keyword() | map()) ::
-          {:ok, value() | nil} | {:error, term()}
   def lookup(%__MODULE__{} = program, input, name, arg_exprs, opts \\ [])
       when is_binary(name) and is_list(arg_exprs) do
-    opts = Common.option_map(opts)
-
-    program.ref
-    |> Native.lookup_program(run_source(program, input, opts), name, arg_exprs)
-    |> Common.from_native_lookup()
+    Options.with_options(opts, :program_query, fn opts ->
+      with {:ok, source} <- run_source(program, input, opts),
+           true <- Enum.all?(arg_exprs, &is_binary/1) do
+        program.ref
+        |> Native.lookup_program(source, name, arg_exprs)
+        |> Common.from_native_lookup()
+      else
+        false -> {:error, {:invalid_option, "lookup arguments must be source strings"}}
+        error -> error
+      end
+    end)
   end
 
   @doc """
@@ -601,7 +540,6 @@ defmodule Egglog.Program do
 
   Raises if native egglog rejects the query-local input or lookup expression.
   """
-  @spec lookup!(t(), input(), String.t(), [String.t()], keyword() | map()) :: value() | nil
   def lookup!(%__MODULE__{} = program, input, name, arg_exprs, opts \\ []) do
     program
     |> lookup(input, name, arg_exprs, opts)
@@ -609,15 +547,15 @@ defmodule Egglog.Program do
   end
 
   @doc @snapshot_doc
-  @spec snapshot(t(), input(), keyword() | map()) :: {:ok, map()} | {:error, term()}
   def snapshot(%__MODULE__{} = program, input, opts \\ []) do
-    opts = Common.option_map(opts)
-    {render, run_opts} = Common.snapshot_run_opts(opts)
+    Options.with_options(opts, :program_snapshot, fn opts ->
+      {render, run_opts} = Common.snapshot_run_opts(opts)
 
-    with {:ok, result} <- run(program, input, run_opts),
-         {:ok, snapshot} <- Common.snapshot_from_result(result, opts, render) do
-      {:ok, snapshot}
-    end
+      with {:ok, result} <- run(program, input, run_opts),
+           {:ok, snapshot} <- Common.snapshot_from_result(result, opts, render) do
+        {:ok, snapshot}
+      end
+    end)
   end
 
   @doc """
@@ -628,7 +566,6 @@ defmodule Egglog.Program do
   Raises if native egglog rejects the input, Graphviz rendering fails, or
   artifact writing fails.
   """
-  @spec snapshot!(t(), input(), keyword() | map()) :: map()
   def snapshot!(%__MODULE__{} = program, input, opts \\ []) do
     program
     |> snapshot(input, opts)
@@ -643,7 +580,6 @@ defmodule Egglog.Program do
   query-local node/class counts, visualization, or JSON inspection, use
   `snapshot/3` on the query you want to inspect.
   """
-  @spec num_tuples(t()) :: {:ok, non_neg_integer()} | {:error, term()}
   def num_tuples(%__MODULE__{} = program) do
     program.ref |> Native.program_num_tuples() |> Common.from_native_count()
   end
@@ -651,7 +587,6 @@ defmodule Egglog.Program do
   @doc """
   Closes the native loaded-program resource.
   """
-  @spec close(t()) :: :ok | {:error, term()}
   def close(%__MODULE__{} = program) do
     program.ref |> Native.close_program() |> Common.from_native_close()
   end
@@ -671,8 +606,10 @@ defmodule Egglog.Program do
   end
 
   defp run_source(program, input, opts) do
-    input = normalize_input(input)
-    build_run_source(program, input, budget(program, input, opts), mode(input, opts))
+    with {:ok, input} <-
+           Options.input(if(match?(%Commands{}, input), do: input.source || "", else: input)) do
+      {:ok, build_run_source(program, input, budget(program, input, opts), mode(input, opts))}
+    end
   end
 
   defp budget(program, input, opts) do
@@ -683,18 +620,13 @@ defmodule Egglog.Program do
 
   defp mode(input, opts), do: Common.get(opts, :mode, Common.get(input, :mode, :default))
 
-  defp append_request(input, request) when is_binary(input),
-    do: %{source: input, requests: [request]}
+  defp run_request(program, %Commands{source: source}, request, opts),
+    do: run_request(program, source || "", request, opts)
 
-  defp append_request(input, request) when is_list(input),
-    do: %{commands: input, requests: [request]}
-
-  defp append_request(%Commands{source: source}, request),
-    do: %{source: source || "", requests: [request]}
-
-  defp append_request(input, request) when is_map(input) do
-    requests = Common.get(input, :requests, [])
-    Map.put(input, :requests, List.wrap(requests) ++ [request])
+  defp run_request(program, input, request, opts) do
+    with {:ok, input} <- Options.input(input) do
+      run(program, Map.update(input, :requests, [request], &(&1 ++ [request])), opts)
+    end
   end
 
   defp schedule_command(program, input, budget, mode) do
@@ -707,12 +639,13 @@ defmodule Egglog.Program do
   defp mode_or_budget_schedule(program, budget, mode) do
     mode_schedule = Map.get(program.modes, mode) || Map.get(program.modes, to_string(mode))
 
+    rounds = Common.get(budget, :rounds, 0)
+
     cond do
       is_binary(mode_schedule) ->
         schedule_to_command(mode_schedule)
 
-      rounds =
-          Common.positive_integer(Common.get(budget, :rounds) || Common.get(budget, "rounds")) ->
+      rounds > 0 ->
         "(run #{rounds})"
 
       true ->
@@ -781,11 +714,6 @@ defmodule Egglog.Program do
 
   defp source_from(spec) when is_map(spec),
     do: Common.get(spec, :source) || Common.get(spec, :program) || ""
-
-  defp normalize_input(%Commands{source: source}), do: %{source: source || ""}
-  defp normalize_input(source) when is_binary(source), do: %{source: source}
-  defp normalize_input(commands) when is_list(commands), do: %{commands: commands}
-  defp normalize_input(input) when is_map(input), do: input
 
   defp normalize_map(nil), do: %{}
   defp normalize_map(map) when is_map(map), do: map

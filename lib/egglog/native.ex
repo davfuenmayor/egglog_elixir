@@ -1,7 +1,41 @@
 defmodule Egglog.Native do
   @moduledoc false
 
-  use Rustler, otp_app: :egglog_elixir, crate: "egglog_nif"
+  @build_from_source Application.compile_env(:egglog_elixir, :build_from_source, true) or
+                       System.get_env("RUSTLER_PRECOMPILED_FORCE_BUILD_ALL") in ["1", "true"] or
+                       Application.compile_env(:rustler_precompiled, :force_build_all, false) or
+                       Application.compile_env(
+                         :rustler_precompiled,
+                         [:force_build, :egglog_elixir],
+                         false
+                       )
+
+  if @build_from_source do
+    # Validate resolution before Rustler invokes Cargo without --locked.
+    case System.cmd("cargo", ["metadata", "--locked", "--format-version=1"],
+           cd: Path.expand("../../native/egglog_nif", __DIR__)
+         ) do
+      {_metadata, 0} -> :ok
+      {output, _status} -> raise "locked native dependency resolution failed:\n#{output}"
+    end
+
+    use Rustler, otp_app: :egglog_elixir, crate: "egglog_nif", mode: :release
+  else
+    use RustlerPrecompiled,
+      otp_app: :egglog_elixir,
+      crate: "egglog_nif",
+      base_url:
+        Application.compile_env(
+          :egglog_elixir,
+          :precompiled_url,
+          "https://github.com/davfuenmayor/egglog_elixir/releases/download/v#{Mix.Project.config()[:version]}"
+        )
+        |> String.trim_trailing("/")
+        |> Kernel.<>("/"),
+      version: Mix.Project.config()[:version],
+      targets: ["x86_64-unknown-linux-gnu"],
+      nif_versions: ["2.15"]
+  end
 
   def parse_program(_source), do: :erlang.nif_error(:nif_not_loaded)
   def load_program(_source, _proofs?), do: :erlang.nif_error(:nif_not_loaded)

@@ -7,15 +7,12 @@ defmodule Egglog.Snapshot do
   notebooks, and debugging sessions.
   """
 
-  @type decoded :: map()
-
   @doc """
   Decodes an egglog JSON snapshot.
 
   Accepts a raw JSON string, a snapshot map returned by `Egglog.snapshot/3`, or
   a run result containing a native `:snapshot`.
   """
-  @spec decode(String.t() | map()) :: {:ok, decoded()} | {:error, term()}
   def decode(json) when is_binary(json), do: Jason.decode(json)
 
   def decode(%{"nodes" => _nodes} = decoded), do: {:ok, decoded}
@@ -27,7 +24,6 @@ defmodule Egglog.Snapshot do
   @doc """
   Bang variant of `decode/1`.
   """
-  @spec decode!(String.t() | map()) :: decoded()
   def decode!(snapshot) do
     case decode(snapshot) do
       {:ok, decoded} -> decoded
@@ -38,19 +34,16 @@ defmodule Egglog.Snapshot do
   @doc """
   Returns the serialized node map from a decoded or raw JSON snapshot.
   """
-  @spec nodes(String.t() | map()) :: map()
   def nodes(snapshot), do: decode!(snapshot) |> Map.get("nodes", %{})
 
   @doc """
   Returns the serialized e-class metadata map from a decoded or raw JSON snapshot.
   """
-  @spec classes(String.t() | map()) :: map()
   def classes(snapshot), do: decode!(snapshot) |> Map.get("class_data", %{})
 
   @doc """
   Counts serialized e-nodes by operator name.
   """
-  @spec operator_counts(String.t() | map()) :: %{String.t() => non_neg_integer()}
   def operator_counts(snapshot) do
     snapshot
     |> nodes()
@@ -63,7 +56,6 @@ defmodule Egglog.Snapshot do
   The summary is deliberately plain data so it can be displayed directly in
   IEx, tests, or Livebook.
   """
-  @spec summary(String.t() | map()) :: map()
   def summary(snapshot) do
     decoded = decode!(snapshot)
     nodes = Map.get(decoded, "nodes", %{})

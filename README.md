@@ -92,7 +92,10 @@ as reference material instead of being reimplemented in Elixir.
 
 ## Requirements
 
-This project uses Rustler, so compiling the NIF requires Rust and Cargo.
+Source builds use release mode and require Elixir 1.19+, a compatible Erlang/OTP,
+Rust/Cargo 1.91+, and a platform linker/C toolchain. Dependency resolution is
+checked with `cargo metadata --locked` before Rustler compiles. Keep both lockfiles.
+See [API coverage](API_COVERAGE.md) and [known issues](KNOWN_ISSUES.md).
 
 For local development:
 
@@ -107,3 +110,40 @@ visualizations additionally need Graphviz's `dot` executable on `PATH`.
 The NIF crate lives in `native/egglog_nif` and depends on the upstream Rust
 `egglog` crate by a pinned Git revision. It does not require a sibling checkout
 of the upstream egglog repository.
+
+### Native artifacts
+
+Source compilation remains the default. The wrapper also supports
+checksum-verified RustlerPrecompiled downloads for `x86_64-unknown-linux-gnu`
+(NIF API 2.15). Enable downloads only after the matching release artifact is
+published:
+
+```elixir
+config :egglog_elixir, build_from_source: false
+```
+
+Use `RUSTLER_PRECOMPILED_FORCE_BUILD_ALL=true` to force a source build. To prepare
+a release archive locally, run `MIX_ENV=prod mix run scripts/package_native.exs`.
+It writes an archive under `dist/` and updates `checksum-Elixir.Egglog.Native.exs`;
+review and ship the checksum with the matching release. It does not upload anything.
+Only the listed target has been verified; other platforms use source builds.
+
+Deployed source-built releases do not need Cargo. The tested Linux artifact links
+against glibc (2.34+), libm and libgcc_s; Graphviz's `dot` is needed only for SVG rendering.
+DOT and JSON snapshots work without Graphviz. Native artifact archives include
+the wrapper and upstream MIT notices.
+
+### Testing a local upstream checkout
+
+Use Cargo's Git-source patch in an uncommitted local change to
+`native/egglog_nif/Cargo.toml`:
+
+```toml
+[patch."https://github.com/egraphs-good/egglog.git"]
+egglog = { path = "../../../egglog" }
+```
+
+Regenerate the local Cargo lockfile with `cargo update --manifest-path
+native/egglog_nif/Cargo.toml`, then rebuild from source. Upstream's path-based
+workspace dependencies follow that checkout. Restore the patch and lockfile
+before distributing; normal installations retain the pinned Git revision.

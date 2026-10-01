@@ -132,7 +132,7 @@ defmodule Egglog.EGraphIntegrationTest do
 
     assert :ok = EGraph.pop(egraph)
     assert {:ok, _} = EGraph.run(egraph, "(check (= x (A)))")
-    assert {:error, {:native_error, message}} = EGraph.run(egraph, "(check (= y (B)))")
+    assert {:error, {:check_failed, message}} = EGraph.run(egraph, "(check (= y (B)))")
     assert message =~ "Check failed"
   end
 
