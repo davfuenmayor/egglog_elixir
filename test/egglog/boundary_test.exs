@@ -5,6 +5,19 @@ defmodule Egglog.BoundaryTest do
 
   alias Egglog.{Commands, EGraph, Program}
 
+  test "invalid timeouts are rejected before native input can mutate a graph" do
+    EGraph.with_egraph(fn graph ->
+      for timeout <- [0, -1, nil, :infinity, "bad", 4_294_967_296] do
+        assert {:error, {:invalid_option, _}} = EGraph.snapshot(graph, render_timeout: timeout)
+      end
+
+      assert EGraph.num_tuples(graph) == {:ok, 0}
+
+      assert {:error, {:invalid_option, _}} =
+               EGraph.run(graph, "(relation added ())", render_timeout: 1)
+    end)
+  end
+
   @theory """
   (datatype Math (Num i64) (Add Math Math))
   (rewrite (Add a (Num 0)) a)

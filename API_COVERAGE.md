@@ -51,7 +51,8 @@ back if a later artifact write fails.
 no graph execution, rewriting, or extraction is reimplemented in Elixir.
 `Output.texts/2` and `Output.print/2` use only native result text. SVG rendering
 has a separate `:render_timeout` (30,000 milliseconds by default); expiration
-kills the renderer and returns a tagged error without changing native state.
+kills the renderer without changing native state. Explicit SVG requests return a
+tagged error; automatic rendering falls back to native DOT.
 
 ## Verification
 
@@ -59,20 +60,19 @@ Run `mix test` and `cargo test --locked --manifest-path native/egglog_nif/Cargo.
 Integration tests cover clone isolation, concurrent callers, creator lifetime,
 checks and type errors, report aggregation, extraction truncation, parsed commands,
 option validation, native partial mutation, snapshots and artifact failures.
-Native tests cover panic cleanup. Published multi-platform artifacts remain
-outside this local verification; only the Linux x86_64 GNU artifact is prepared.
+Native tests cover panic cleanup. Installation tests cover checksum/target/payload
+validation, missing-file restoration, concurrent installs and relocation.
+Included bundles and platform-specific coverage are recorded in
+[MULTIPLATFORM.md](MULTIPLATFORM.md). No release assets have been published.
 
-Local verification: **70 ExUnit checks (69 tests, 1 doctest)** and **2 native
-panic-cleanup tests** pass. Documentation generation with warnings as errors,
-formatting, and Clippy also pass. A separate consumer downloaded, checked and
-loaded the prepared native archive from local HTTP with Cargo absent from PATH.
-The locked native dependency graph also compiles with the documented Rust 1.91.0
-minimum.
+Local verification: **78 ExUnit checks (77 tests, 1 doctest)** pass on Linux.
+The actual Hex package installs and executes both APIs with an empty PATH.
+Earlier native verification passed **2 panic-cleanup tests**, documentation with
+warnings as errors, Clippy, and compilation with the documented Rust 1.91.0
+minimum. See MULTIPLATFORM.md for current runtime and emulation results.
 
 `scripts/check_livebooks.exs` evaluates disposable copies in real Livebook 0.19.9
-sessions, including `Mix.install`, Kino and Graphviz SVG rendering. Equality
-Saturation, Datalog, Scheduling, Cost Model and Extraction, Case Study, and Getting
-Started pass: **114 executable cells**. Analysis returns a rendering timeout
-at its first large SVG layout; see [KNOWN_ISSUES.md](KNOWN_ISSUES.md). The remaining Analysis cells have
-not passed this full check. These checks evaluate notebook outputs; they do not
+sessions, including `Mix.install`, Kino and optional Graphviz rendering. All seven
+notebooks pass: **139 executable cells**, including Analysis with the automatic
+DOT fallback for expensive SVG layouts. These checks evaluate notebook outputs; they do not
 automate browser interaction or visually inspect diagrams.

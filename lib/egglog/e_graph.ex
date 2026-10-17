@@ -59,7 +59,7 @@ defmodule Egglog.EGraph do
       Accepted values:
 
       * `:auto`, `"auto"`, or `true` - render SVG with Graphviz when the
-        `dot` executable is available on `PATH`; otherwise return DOT text.
+        `dot` executable succeeds; otherwise return native DOT text.
       * `:svg` or `"svg"` - require Graphviz SVG rendering. Returns
         `{:error, {:graphviz_missing, message}}` if `dot` is unavailable.
       * `:dot`, `"dot"`, `false`, or `nil` - return Graphviz DOT text.
@@ -67,7 +67,8 @@ defmodule Egglog.EGraph do
 
     * `:render_timeout` - positive Graphviz time limit in milliseconds; defaults
       to `30_000`. Expiration terminates the renderer and returns
-      `{:error, {:graphviz_timeout, milliseconds}}`, including in `:auto` mode.
+      `{:error, {:graphviz_timeout, milliseconds}}` for explicit SVG requests;
+      automatic rendering falls back to DOT text.
       Native execution and session state are unaffected. DOT/JSON output does
       not invoke Graphviz.
 
