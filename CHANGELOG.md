@@ -7,15 +7,17 @@
 * Per-graph thread configuration, including load-time settings retained by clones.
 * Discard program bases after caught panics; preserve unexpected server exit reasons.
 * Request helpers consistently normalize string-key inputs before appending requests.
-* Prepare versioned, checksum-verified native distribution and release tooling.
+* Bundle checksum-verified Linux x86-64/ARM64 and Windows x86-64 native builds;
+  normal installation needs no Rust toolchain. Add native macOS build recipes.
 * Bound SVG rendering with `:render_timeout` and terminate Graphviz on expiration.
+* Fall back to native DOT when automatic SVG rendering fails or times out.
 * Share native output display helpers; remove source-derived check messages from Livebooks.
 
 * Dirty scheduling for native counting and closing; panic-safe resource handling.
 * Creator-monitored mutable sessions and scoped program/graph helpers.
 * Native failed-check categories, corrected report aggregation and extraction.
 * Validated options and tagged snapshot I/O failures; public typespecs removed.
-* API inventory, native build documentation, and opt-in precompiled artifacts.
+* API inventory and multiplatform native build/test documentation.
 
 ## v0.1.0
 

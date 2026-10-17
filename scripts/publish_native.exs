@@ -23,17 +23,12 @@ unless run!.("git", ["rev-parse", "HEAD"]) ==
          run!.("git", ["rev-parse", "refs/tags/#{tag}^{commit}"]),
        do: raise("The release tag #{tag} must point to the current source commit.")
 
-checksum_file = "checksum-Elixir.Egglog.Native.exs"
-{checksums, _} = Code.eval_file(checksum_file)
-
 archives =
-  Enum.map(checksums, fn {filename, expected} ->
-    unless String.starts_with?(filename, "libegglog_nif-v#{version}-"),
-      do: raise("Checksum contains an artifact for a different release: #{filename}")
-
-    path = Path.join("dist", filename)
-    actual = "sha256:" <> (:crypto.hash(:sha256, File.read!(path)) |> Base.encode16(case: :lower))
-    unless actual == expected, do: raise("Artifact checksum mismatch: #{filename}")
+  Path.wildcard("native/precompiled/egglog-#{version}-*.tar.gz")
+  |> Enum.map(fn path ->
+    expected = File.read!(path <> ".sha256") |> String.trim()
+    actual = :crypto.hash(:sha256, File.read!(path)) |> Base.encode16(case: :lower)
+    unless actual == expected, do: raise("Artifact checksum mismatch: #{path}")
     path
   end)
 
@@ -47,6 +42,7 @@ case System.cmd(gh, ["release", "view", tag, "--repo", repo], stderr_to_stdout: 
 end
 
 notes = Path.join("dist", "release_notes.md")
+File.mkdir_p!("dist")
 
 File.write!(
   notes,
@@ -66,7 +62,7 @@ run!.(
     "Egglog Elixir #{version}",
     "--notes-file",
     notes
-  ] ++ archives ++ [checksum_file]
+  ] ++ Enum.flat_map(archives, &[&1, &1 <> ".sha256"])
 )
 
 IO.puts("Published #{repo} release #{tag} with verified native artifacts.")

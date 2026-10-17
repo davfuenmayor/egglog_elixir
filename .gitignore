@@ -10,9 +10,15 @@
 /native/**/target/
 
 # Package/archive outputs
-*.ez
-egglog_elixir-*.tar
+/*.ez
+/egglog_elixir-*.tar
 /egglog_elixir-*/
+
+# Keep only distributable native bundles and their documentation
+/native/precompiled/*
+!/native/precompiled/README.md
+!/native/precompiled/egglog-*.tar.gz
+!/native/precompiled/egglog-*.tar.gz.sha256
 
 # Crash dumps and runtime logs
 erl_crash.dump
@@ -21,12 +27,9 @@ erl_crash.dump
 
 # Livebook local state and generated exports/artifacts
 .livemd_checkpoints/
-**/.livemd_checkpoints/
 livebook_import/
 livebook_uploads/
 *.livemd.autosave
-*.dot
-*.svg
 
 # Elixir language server and editor state
 /.elixir_ls/
@@ -38,7 +41,9 @@ livebook_uploads/
 # OS files
 .DS_Store
 Thumbs.db
+Desktop.ini
+*.exe.stackdump
 
-# Locally generated precompiled release archives
+# Release staging and local tooling state
 /dist/
 /.expert/

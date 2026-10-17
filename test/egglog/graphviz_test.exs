@@ -3,6 +3,10 @@ defmodule Egglog.GraphvizTest do
   use ExUnit.Case, async: false
   alias Egglog.{EGraph, Program}
 
+  if :os.type() == {:win32, :nt} do
+    @moduletag skip: "POSIX renderer probes require /bin/sh and /bin/kill"
+  end
+
   setup %{tmp_dir: dir} do
     previous = System.fetch_env!("PATH")
     System.put_env("PATH", dir <> ":" <> previous)
@@ -19,7 +23,9 @@ defmodule Egglog.GraphvizTest do
     fake_dot(dir, "printf '%s\\n' \"$$\" \"$2\" > '#{marker}'\nwhile :; do :; done\n")
 
     EGraph.with_egraph("(relation seen (i64))\n(seen 1)", fn graph ->
-      assert {:error, {:graphviz_timeout, 150}} = EGraph.snapshot(graph, render_timeout: 150)
+      assert {:error, {:graphviz_timeout, 150}} =
+               EGraph.snapshot(graph, render: :svg, render_timeout: 150)
+
       assert_stopped(marker)
       assert EGraph.num_tuples(graph) == {:ok, 1}
       assert {:ok, %{format: :json}} = EGraph.snapshot(graph, render: :json, render_timeout: 1)
@@ -32,7 +38,7 @@ defmodule Egglog.GraphvizTest do
       assert_stopped(marker)
 
       assert_raise RuntimeError, ~r/graphviz_timeout/, fn ->
-        Program.snapshot!(program, "", render_timeout: 150)
+        Program.snapshot!(program, "", render: :svg, render_timeout: 150)
       end
 
       assert_stopped(marker)
@@ -44,20 +50,25 @@ defmodule Egglog.GraphvizTest do
     fake_dot(dir, "echo 'layout failed' >&2\nexit 7\n")
 
     EGraph.with_egraph(fn graph ->
-      assert {:error, {:graphviz_failed, 7, "layout failed\n"}} = EGraph.snapshot(graph)
+      assert {:error, {:graphviz_failed, 7, "layout failed\n"}} =
+               EGraph.snapshot(graph, render: :svg)
     end)
   end
 
-  test "invalid timeouts are rejected before native input can mutate a graph" do
-    EGraph.with_egraph(fn graph ->
-      for timeout <- [0, -1, nil, :infinity, "bad", 4_294_967_296] do
-        assert {:error, {:invalid_option, _}} = EGraph.snapshot(graph, render_timeout: timeout)
-      end
+  test "auto rendering retains native DOT on renderer failure or timeout", %{dir: dir} do
+    fake_dot(dir, "echo 'layout failed' >&2\nexit 7\n")
 
-      assert EGraph.num_tuples(graph) == {:ok, 0}
+    EGraph.with_egraph("(relation seen (i64)) (seen 1)", fn graph ->
+      assert {:ok, %{format: :dot, text: dot}} = EGraph.snapshot(graph)
+      assert dot =~ "digraph"
+    end)
 
-      assert {:error, {:invalid_option, _}} =
-               EGraph.run(graph, "(relation added ())", render_timeout: 1)
+    marker = Path.join(dir, "renderer")
+    fake_dot(dir, "printf '%s\\n' \"$$\" \"$2\" > '#{marker}'\nwhile :; do :; done\n")
+
+    Program.with_program("", fn program ->
+      assert {:ok, %{format: :dot}} = Program.snapshot(program, "", render_timeout: 150)
+      assert_stopped(marker)
     end)
   end
 

@@ -27,23 +27,23 @@ and repeated concurrent tests pass at the replacement pin.
 
 ## Precompiled distribution
 
-Checksum-verified loading, local packaging and guarded GitHub publication scripts
-are implemented. Source builds remain the default until matching artifacts are published. Only
-Linux x86_64 GNU is prepared; other targets have not been verified. Publication
-requires authenticated GitHub release access and a matching pushed source tag;
-neither is supplied by this workspace.
+Normal installs use included, checksum-verified Linux x86-64/ARM64 and Windows
+x86-64 bundles. macOS bundles still require matching Mac builders and runners.
+Windows validation uses Wine; ARM64 validation uses QEMU. Native hardware and
+minimum OS/OTP validation remain release checks. See
+[MULTIPLATFORM.md](MULTIPLATFORM.md) for build commands and exact coverage.
+No package or release assets have been published.
 
 ## Analysis Livebook SVG layout
 
-The real Livebook 0.19.9 check of `03-analysis.livemd` cannot finish its first
-`Egglog.EGraph.snapshot!/1` SVG rendering cell within the rendering deadline.
-Graphviz `dot` remains CPU-bound while laying out the generated 8,745-line DOT
-graph. The wrapper now kills the renderer after 30 seconds by default and returns
-`{:error, {:graphviz_timeout, 30_000}}`; callers can set `:render_timeout`.
-The other six notebooks pass with SVG rendering enabled; later Analysis cells
-have not passed this full check.
+Graphviz can exceed the rendering deadline while laying out the Analysis
+notebook's large graphs. Automatic rendering kills the renderer after 30 seconds
+by default and returns native DOT, allowing the lesson to continue. Explicit
+`render: :svg` requests return `{:error, {:graphviz_timeout, 30_000}}`;
+callers can set `:render_timeout`. All seven notebooks pass the real Livebook
+0.19.9 runtime check with this fallback.
 
 DOT/JSON output avoids SVG layout. Native snapshot limits
 (`snapshot_max_functions`, `snapshot_max_calls_per_function`) can reduce the
-diagram, but the notebook currently requests the full graph. No notebook content
-was changed to bypass this failure.
+diagram, but the notebook currently requests the full graph. Notebook content
+remains unchanged.

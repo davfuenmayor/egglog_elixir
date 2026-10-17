@@ -43,8 +43,8 @@ For debugging and teaching examples, use `Egglog.snapshot/3` or
 Snapshots ask native egglog to serialize the e-graph. The wrapper can return
 DOT, SVG, or JSON:
 
-* `render: :auto` returns SVG when Graphviz's `dot` executable is available and
-  falls back to DOT.
+* `render: :auto` returns SVG when Graphviz completes successfully and falls
+  back to native DOT if Graphviz is missing, fails or times out.
 * `render: :dot` returns DOT.
 * `render: :svg` requires SVG rendering.
 * `render: :json` returns egglog's JSON serialization.
@@ -54,8 +54,9 @@ and tests. The wrapper itself has no Livebook or Kino dependency.
 `Egglog.Output.print/2` prints only text returned by native egglog.
 
 SVG rendering has a separate `render_timeout: 30_000` millisecond default.
-Expiration kills Graphviz and returns `{:error, {:graphviz_timeout, milliseconds}}`;
-it does not cancel or roll back native egglog execution. Use native snapshot
+Expiration kills Graphviz. Explicit SVG requests return
+`{:error, {:graphviz_timeout, milliseconds}}`; automatic rendering returns DOT.
+This does not cancel or roll back native egglog execution. Use native snapshot
 limits to reduce diagrams, or `render: :dot` / `render: :json` to skip SVG layout.
 
 ## Concurrency
@@ -96,61 +97,73 @@ thin wrapper. Upstream sections that depend on experimental scheduler commands,
 dynamic cost models, or Rust-library extension hooks are marked in the notebooks
 as reference material instead of being reimplemented in Elixir.
 
-## Requirements
+## Installation and platforms
 
-Source builds use release mode and require Elixir 1.19+, a compatible Erlang/OTP,
-Rust/Cargo 1.91+, and a platform linker/C toolchain. Dependency resolution is
-checked with `cargo metadata --locked` before Rustler compiles. Keep both lockfiles.
-See [API coverage](API_COVERAGE.md) and [known issues](KNOWN_ISSUES.md).
-
-For local development:
-
-```bash
-mix deps.get
-mix test
-```
-
-For Livebook, the Livebook runtime also needs `cargo` on `PATH`. Graph
-visualizations additionally need Graphviz's `dot` executable on `PATH`.
-
-The wrapper targets egglog 3.0.0 at revision
-`b912caa9694c0c029f9ae3d91db0adc8824e14f5`. Native pattern queries, declaration
-inspection and per-graph thread configuration are documented in the public API.
-
-The NIF crate lives in `native/egglog_nif` and depends on the upstream Rust
-`egglog` crate by a pinned Git revision. It does not require a sibling checkout
-of the upstream egglog repository.
-
-### Native artifacts
-
-Source compilation remains the default. The wrapper also supports
-checksum-verified RustlerPrecompiled downloads for `x86_64-unknown-linux-gnu`
-(NIF API 2.15). Enable downloads only after the matching release artifact is
-published:
+Use this checkout as a dependency, with Elixir 1.19+ and 64-bit Erlang/OTP 27+:
 
 ```elixir
-config :egglog_elixir, build_from_source: false
+{:egglog_elixir, path: "../egglog_elixir"}
 ```
 
-Use `RUSTLER_PRECOMPILED_FORCE_BUILD_ALL=true` to force a source build. To prepare
-a release archive locally, run `MIX_ENV=prod mix run scripts/package_native.exs`.
-It writes an archive under `dist/` and updates `checksum-Elixir.Egglog.Native.exs`;
-review and ship the checksum with the matching release. It does not upload anything.
-Only the listed target has been verified; other platforms use source builds.
+Mix installs a matching, checksum-verified Rustler NIF without Cargo, a compiler,
+or an egglog installation. Linux x86-64/ARM64 (glibc) and Windows x86-64 bundles
+are included. macOS Intel/Apple Silicon build recipes are prepared but require
+Mac runners before binaries can be shipped and validated. musl/Alpine is excluded.
+See [MULTIPLATFORM.md](MULTIPLATFORM.md) for exact build/test status and baselines.
 
-For publication, commit the reviewed sources and checksum, tag the matching
-commit as `v0.2.0`, and push that commit/tag. Then run
-`MIX_ENV=prod mix run scripts/publish_native.exs` with authenticated GitHub CLI
-release access. The script verifies the clean tagged source and archive hashes,
-and refuses to replace an existing release. After publication, consumers can
-use the download configuration above without installing Rust.
+Graphviz is optional: default snapshots show SVG if `dot` is available, otherwise
+DOT text. JSON snapshots always work without Graphviz. All notebook examples
+run through native egglog, and the default Standalone Livebook runtime works.
 
-Deployed source-built releases do not need Cargo. The tested Linux artifact links
-against glibc (2.34+), libm and libgcc_s; Graphviz's `dot` is needed only for SVG rendering.
-DOT and JSON snapshots work without Graphviz. Native artifact archives include
-the wrapper and upstream MIT notices.
+```sh
+mix deps.get
+mix test
+mix escript.install hex livebook 0.19.9 --force
+~/.mix/escripts/livebook server livebooks/getting_started.livemd
+```
+
+On Windows, launch Livebook from PowerShell:
+
+```powershell
+& "$HOME\.mix\escripts\livebook.bat" server livebooks/getting_started.livemd
+```
+
+Open the printed local URL, keep the checkout in its original layout, and choose
+**Evaluate all** with the default **Standalone** runtime. The first Kino/dependency
+installation needs network access. The notebook sources are retained verbatim;
+this bundled installation supersedes their source-build prerequisite notes.
+
+### Build or bring your own binaries
+
+Run `scripts/build_native.sh` with Rust/Cargo 1.91+ and a linker, then use
+`mix compile` normally. `EGGLOG_BUILD=1 mix compile` explicitly rebuilds;
+`config :egglog_elixir, build_from_source: true` is still supported.
+
+Mac users need Xcode Command Line Tools and native Rust. Windows users can use
+Rust MSVC/Visual Studio Build Tools or Rust GNU/POSIX MinGW from Git Bash.
+Set `EGGLOG_ELIXIR_BUNDLE` to an external archive's absolute path to use your
+own binaries; keep its `.sha256` alongside it. Local builds allow CPU tuning
+and verification on your own OS; performance/reliability gains need measurement.
+Restart the runtime after replacing a NIF. Full commands are in
+[MULTIPLATFORM.md](MULTIPLATFORM.md).
+
+The wrapper pins egglog 3.0.0 in `native/egglog_nif/Cargo.toml` and its lockfile;
+no sibling upstream checkout is required. Bundles retain the wrapper, upstream
+and third-party notices. See [API coverage](API_COVERAGE.md) and
+[known issues](KNOWN_ISSUES.md).
+
+### Native release assets
+
+The old opt-in RustlerPrecompiled download setup is replaced by bundled archives.
+Normal builds no longer depend on unpublished GitHub releases. Build each target
+with `scripts/build_native.sh`, then review and commit its archive/checksum.
+For an explicitly requested GitHub release, tag the reviewed commit as `v0.2.0`
+and run `MIX_ENV=prod mix run scripts/publish_native.exs` with authenticated
+GitHub CLI access. It checks the clean tagged source and archive hashes and
+refuses to replace an existing release. Builds never publish anything.
 
 ### Testing a local upstream checkout
+
 
 Use Cargo's Git-source patch in an uncommitted local change to
 `native/egglog_nif/Cargo.toml`:

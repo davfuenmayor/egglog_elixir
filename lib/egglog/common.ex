@@ -266,7 +266,13 @@ defmodule Egglog.Common do
         {:error, {:graphviz_missing, "could not find dot executable on PATH"}}
 
       _dot ->
-        render_svg(dot, timeout)
+        case render_svg(dot, timeout) do
+          {:error, _reason} when render in [:auto, "auto", true] ->
+            {:ok, %{format: :dot, text: dot, dot: dot}}
+
+          result ->
+            result
+        end
     end
   end
 
