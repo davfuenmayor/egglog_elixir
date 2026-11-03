@@ -1,12 +1,26 @@
 # E-class analysis
 
+Visual snapshots in this notebook use **render: :mermaid**:
+native JSON is converted to flowchart source and displayed by Kino.Mermaid.
+Each subgraph is an e-class; circular = anchors are argument targets, not
+constructors. Zero-based edge labels preserve argument order. Graphviz is
+not needed for these views; render: :svg / :dot remain available.
+The snapshot retains native JSON and omission metadata. Layout differs
+from Graphviz; identical child classes may collapse duplicate parent nodes.
+
 ## Intro
 
 These notebooks are Livebook adaptations of the upstream egglog tutorial from https://egraphs-good.github.io/egglog-tutorial/. The egglog examples follow the upstream chapter order closely; the extra Elixir cells are there to make normally silent egglog state visible in Livebook.
 
-Each executable egglog block is sent directly to one live mutable `Egglog.EGraph` session. The helper below is only for displaying outputs and snapshots; the cells that change the e-graph call `Egglog.EGraph.run/3` themselves.
+Executable blocks below are independently revisitable Program phases.
+Evaluate setup and preceding source definitions first. Each phase explicitly loads
+its previous source baseline, runs its own step on a clone, and closes the handle.
+The phase_XX values are strings, not graphs. Revisit an earlier phase without
+accumulating declarations or changing a persistent rollback stack.
 
-When using the published package, replace the dependency with `{:egglog_elixir, "~> 0.1"}`.
+
+Use the local checkout below. See [installation and execution contracts](../README.md)
+for maintained platform, publication, lifecycle and limit guidance.
 
 ```elixir
 Mix.install([
@@ -16,13 +30,24 @@ Mix.install([
 ```
 
 ```elixir
-defmodule Tutorial do
-  def render_snapshot(%{format: :svg, svg: svg}), do: Kino.HTML.new(svg)
-  def render_snapshot(%{text: text}), do: text
+render_snapshot = fn
+  %{format: :mermaid, mermaid: source} = snapshot ->
+    graph = Kino.Mermaid.new(source)
+    if snapshot.omitted in [nil, ""],
+      do: graph,
+      else: Kino.Layout.grid([Kino.Text.new("Partial snapshot: " <> snapshot.omitted), graph])
+  %{format: :svg, svg: svg} -> Kino.HTML.new(svg)
+  %{text: text} -> text
 end
 
-{:ok, egraph} = Egglog.EGraph.new()
+# Source baseline, not a native handle.
+phase_00 = ""
 ```
+
+Visual views below are capped at 12 functions and 6 calls per function
+to keep diagrams readable and within Mermaid's browser limits.
+The helper explicitly displays native omission metadata for partial views.
+Adjacent JSON summaries still inspect the uncapped graph.
 
 ## E-class analysis
 
@@ -53,7 +78,7 @@ Our first example will continue with the `path` example in lesson 2.
 ```
 
 ```elixir
-egglog = """
+step_01 = """
 (datatype Expr
     (Num BigRat)
     (Var String)
@@ -62,7 +87,10 @@ egglog = """
     (Div Expr Expr))
 """
 
-{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+phase_01 = phase_00 <> "\n" <> step_01
+result = Egglog.Program.with_program(phase_00, fn program ->
+  Egglog.Program.run!(program, step_01)
+end)
 Egglog.Output.print(result)
 ```
 
@@ -75,13 +103,16 @@ Let's define some BigRat constants that will be useful later.
 ```
 
 ```elixir
-egglog = """
+step_02 = """
 (let zero (bigrat (bigint 0) (bigint 1)))
 (let one (bigrat (bigint 1) (bigint 1)))
 (let two (bigrat (bigint 2) (bigint 1)))
 """
 
-{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+phase_02 = phase_01 <> "\n" <> step_02
+result = Egglog.Program.with_program(phase_01, fn program ->
+  Egglog.Program.run!(program, step_02)
+end)
 Egglog.Output.print(result)
 ```
 
@@ -93,11 +124,14 @@ We define a less-than-or-equal-to relation between two expressions.
 ```
 
 ```elixir
-egglog = """
+step_03 = """
 (relation leq (Expr Expr))
 """
 
-{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+phase_03 = phase_02 <> "\n" <> step_03
+result = Egglog.Program.with_program(phase_02, fn program ->
+  Egglog.Program.run!(program, step_03)
+end)
 Egglog.Output.print(result)
 ```
 
@@ -113,7 +147,7 @@ We define rules to deduce the `leq` relation. We start with transitivity of `leq
 ```
 
 ```elixir
-egglog = """
+step_04 = """
 (rule (
     (leq e1 e2)
     (leq e2 e3)
@@ -122,7 +156,10 @@ egglog = """
 ))
 """
 
-{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+phase_04 = phase_03 <> "\n" <> step_04
+result = Egglog.Program.with_program(phase_03, fn program ->
+  Egglog.Program.run!(program, step_04)
+end)
 Egglog.Output.print(result)
 ```
 
@@ -141,7 +178,7 @@ Base case for `leq` for `Num`:
 ```
 
 ```elixir
-egglog = """
+step_05 = """
 (rule (
     (= e1 (Num n1))
     (= e2 (Num n2))
@@ -151,7 +188,10 @@ egglog = """
 ))
 """
 
-{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+phase_05 = phase_04 <> "\n" <> step_05
+result = Egglog.Program.with_program(phase_04, fn program ->
+  Egglog.Program.run!(program, step_05)
+end)
 Egglog.Output.print(result)
 ```
 
@@ -166,7 +206,7 @@ Base case for `leq` for `Var`:
 ```
 
 ```elixir
-egglog = """
+step_06 = """
 (rule (
     (= v (Var x))
 ) (
@@ -174,7 +214,10 @@ egglog = """
 ))
 """
 
-{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+phase_06 = phase_05 <> "\n" <> step_06
+result = Egglog.Program.with_program(phase_05, fn program ->
+  Egglog.Program.run!(program, step_06)
+end)
 Egglog.Output.print(result)
 ```
 
@@ -192,7 +235,7 @@ Recursive case for `leq` for `Add`:
 ```
 
 ```elixir
-egglog = """
+step_07 = """
 (rule (
     (= e1 (Add e1a e1b))
     (= e2 (Add e2a e2b))
@@ -203,7 +246,10 @@ egglog = """
 ))
 """
 
-{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+phase_07 = phase_06 <> "\n" <> step_07
+result = Egglog.Program.with_program(phase_06, fn program ->
+  Egglog.Program.run!(program, step_07)
+end)
 Egglog.Output.print(result)
 ```
 
@@ -226,7 +272,7 @@ On the other hand, these rules by themselves are pretty weak. For example, they 
 ```
 
 ```elixir
-egglog = """
+step_08 = """
 (birewrite (Add x (Add y z)) (Add (Add x y) z))
 (birewrite (Mul x (Mul y z)) (Mul (Mul x y) z))
 (rewrite (Add x y) (Add y x))
@@ -238,7 +284,10 @@ egglog = """
 (rewrite (Mul (Num a) (Num b)) (Num (* a b)))
 """
 
-{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+phase_08 = phase_07 <> "\n" <> step_08
+result = Egglog.Program.with_program(phase_07, fn program ->
+  Egglog.Program.run!(program, step_08)
+end)
 Egglog.Output.print(result)
 ```
 
@@ -254,7 +303,7 @@ To check our rules, we define two concrete expressions. Before saturation, the `
 ```
 
 ```elixir
-egglog = """
+step_09 = """
 (let expr1 (Add (Var "y") (Add (Num two) (Var "x"))))
 (let expr2 (Add (Add (Add (Var "x") (Var "y")) (Num one)) (Num two)))
 
@@ -263,20 +312,28 @@ egglog = """
 (check (leq expr1 expr2))
 """
 
-{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+phase_09 = phase_08 <> "\n" <> step_09
+result = Egglog.Program.with_program(phase_08, fn program ->
+  Egglog.Program.run!(program, step_09)
+end)
 Egglog.Output.print(result)
 ```
 
 The visualization now contains both expression nodes and the `leq` relation facts that made the final check succeed. This is a good place to see analysis data living beside the equality structure.
 
 ```elixir
-Egglog.EGraph.snapshot!(egraph, render: :json)
+Egglog.Program.with_program(phase_09, fn program ->
+  Egglog.Program.snapshot!(program, "", render: :json)
+end)
 |> Egglog.Snapshot.summary()
 ```
 
 ```elixir
-Egglog.EGraph.snapshot!(egraph)
-|> Tutorial.render_snapshot()
+Egglog.Program.with_program(phase_09, fn program ->
+  Egglog.Program.snapshot!(program, "", render: :mermaid,
+  snapshot_max_functions: 12, snapshot_max_calls_per_function: 6)
+end)
+|> render_snapshot.()
 ```
 
 A useful special case of the `leq` analysis is interval analysis: record an upper bound and a lower bound for an expression when one is known. These are functions, not relations, because we want one best value per expression.
@@ -287,12 +344,15 @@ A useful special case of the `leq` analysis is interval analysis: record an uppe
 ```
 
 ```elixir
-egglog = """
+step_10 = """
 (function upper-bound (Expr) BigRat :merge (min old new))
 (function lower-bound (Expr) BigRat :merge (max old new))
 """
 
-{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+phase_10 = phase_09 <> "\n" <> step_10
+result = Egglog.Program.with_program(phase_09, fn program ->
+  Egglog.Program.run!(program, step_10)
+end)
 Egglog.Output.print(result)
 ```
 
@@ -318,7 +378,7 @@ This is the analysis analogue of quotienting terms: many derivations may produce
 ```
 
 ```elixir
-egglog = """
+step_11 = """
 (rule (
     (leq e (Num n))
 ) (
@@ -332,7 +392,10 @@ egglog = """
 ))
 """
 
-{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+phase_11 = phase_10 <> "\n" <> step_11
+result = Egglog.Program.with_program(phase_10, fn program ->
+  Egglog.Program.run!(program, step_11)
+end)
 Egglog.Output.print(result)
 ```
 
@@ -358,7 +421,7 @@ We can define more specific rules for obtaining the upper and lower bounds of an
 ```
 
 ```elixir
-egglog = """
+step_12 = """
 (rule (
     (= e (Add e1 e2))
     (= (upper-bound e1) u1)
@@ -376,7 +439,10 @@ egglog = """
 ))
 """
 
-{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+phase_12 = phase_11 <> "\n" <> step_12
+result = Egglog.Program.with_program(phase_11, fn program ->
+  Egglog.Program.run!(program, step_12)
+end)
 Egglog.Output.print(result)
 ```
 
@@ -403,7 +469,7 @@ Egglog.Output.print(result)
 ```
 
 ```elixir
-egglog = """
+step_13 = """
 (rule (
     (= e (Mul e1 e2))
     (= le1 (lower-bound e1))
@@ -423,7 +489,10 @@ egglog = """
                    (* ue1 ue2)))))))
 """
 
-{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+phase_13 = phase_12 <> "\n" <> step_13
+result = Egglog.Program.with_program(phase_12, fn program ->
+  Egglog.Program.run!(program, step_13)
+end)
 Egglog.Output.print(result)
 ```
 
@@ -438,7 +507,7 @@ Similarly,
 ```
 
 ```elixir
-egglog = """
+step_14 = """
 (rule (
     (= e (Mul x x))
 ) (
@@ -446,7 +515,10 @@ egglog = """
 ))
 """
 
-{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+phase_14 = phase_13 <> "\n" <> step_14
+result = Egglog.Program.with_program(phase_13, fn program ->
+  Egglog.Program.run!(program, step_14)
+end)
 Egglog.Output.print(result)
 ```
 
@@ -464,7 +536,7 @@ For example, we are interested in non-zero expressions
 ```
 
 ```elixir
-egglog = """
+step_15 = """
 (relation non-zero (Expr))
 (rule ((< (upper-bound e) zero)) ((non-zero e)))
 (rule ((> (lower-bound e) zero)) ((non-zero e)))
@@ -472,7 +544,10 @@ egglog = """
 (rewrite (Mul x (Div y x)) y         :when ((non-zero x)))
 """
 
-{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+phase_15 = phase_14 <> "\n" <> step_15
+result = Egglog.Program.with_program(phase_14, fn program ->
+  Egglog.Program.run!(program, step_15)
+end)
 Egglog.Output.print(result)
 ```
 
@@ -494,7 +569,7 @@ This non-zero analysis lets us optimize expressions that contain division safely
 ```
 
 ```elixir
-egglog = """
+step_16 = """
 (let expr3 (Mul (Num two) (Div (Var "x") (Add (Num one) (Div (Num two) (Num two))))))
 (let expr4 (Var "x"))
 (fail (check (= expr3 expr4)))
@@ -507,20 +582,28 @@ egglog = """
 (check (= expr6 (Num one)))
 """
 
-{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+phase_16 = phase_15 <> "\n" <> step_16
+result = Egglog.Program.with_program(phase_15, fn program ->
+  Egglog.Program.run!(program, step_16)
+end)
 Egglog.Output.print(result)
 ```
 
 The guarded rewrites only fire after the interval analysis derives `non-zero` facts. This snapshot shows the analysis relations and the simplified representatives in the same serialized e-graph.
 
 ```elixir
-Egglog.EGraph.snapshot!(egraph, render: :json)
+Egglog.Program.with_program(phase_16, fn program ->
+  Egglog.Program.snapshot!(program, "", render: :json)
+end)
 |> Egglog.Snapshot.summary()
 ```
 
 ```elixir
-Egglog.EGraph.snapshot!(egraph)
-|> Tutorial.render_snapshot()
+Egglog.Program.with_program(phase_16, fn program ->
+  Egglog.Program.snapshot!(program, "", render: :mermaid,
+  snapshot_max_functions: 12, snapshot_max_calls_per_function: 6)
+end)
+|> render_snapshot.()
 ```
 
 **Debugging tips!**
@@ -534,12 +617,15 @@ Egglog.EGraph.snapshot!(egraph)
 ```
 
 ```elixir
-egglog = """
+step_17 = """
 (print-size leq)
 (print-size)
 """
 
-{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+phase_17 = phase_16 <> "\n" <> step_17
+result = Egglog.Program.with_program(phase_16, fn program ->
+  Egglog.Program.run!(program, step_17)
+end)
 Egglog.Output.print(result)
 ```
 
@@ -552,11 +638,14 @@ Egglog.Output.print(result)
 ```
 
 ```elixir
-egglog = """
+step_18 = """
 (print-function leq 15)
 """
 
-{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+phase_18 = phase_17 <> "\n" <> step_18
+result = Egglog.Program.with_program(phase_17, fn program ->
+  Egglog.Program.run!(program, step_18)
+end)
 Egglog.Output.print(result)
 ```
 
@@ -568,11 +657,14 @@ Egglog.Output.print(result)
 ```
 
 ```elixir
-egglog = """
+step_19 = """
 (extract expr3 3)
 """
 
-{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+phase_19 = phase_18 <> "\n" <> step_19
+result = Egglog.Program.with_program(phase_18, fn program ->
+  Egglog.Program.run!(program, step_19)
+end)
 Egglog.Output.print(result)
 ```
 

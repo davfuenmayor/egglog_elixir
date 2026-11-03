@@ -9,7 +9,7 @@ defmodule Egglog.Options do
     :snapshot_split_primitive_outputs
   ]
   @run @snapshot ++ [:output_limit]
-  @artifacts [:render, :render_timeout, :path, :dot_path, :svg_path, :json_path]
+  @artifacts [:render, :render_timeout, :path, :dot_path, :svg_path, :json_path, :mermaid_path]
   @input [
            :source,
            :program,
@@ -109,16 +109,41 @@ defmodule Egglog.Options do
        do: {:ok, value}
 
   defp normalize(:render, value)
-       when value in [nil, false, true, :auto, :dot, :svg, :json, "auto", "dot", "svg", "json"],
+       when value in [
+              nil,
+              false,
+              true,
+              :auto,
+              :dot,
+              :svg,
+              :json,
+              :mermaid,
+              "auto",
+              "dot",
+              "svg",
+              "json",
+              "mermaid"
+            ],
        do: {:ok, value}
 
   defp normalize(:mode, value) when is_atom(value) or is_binary(value), do: {:ok, value}
 
-  defp normalize(key, nil) when key in [:name, :path, :dot_path, :svg_path, :json_path],
-    do: {:ok, nil}
+  defp normalize(key, nil)
+       when key in [:name, :path, :dot_path, :svg_path, :json_path, :mermaid_path],
+       do: {:ok, nil}
 
   defp normalize(key, value)
-       when key in [:name, :path, :dot_path, :svg_path, :json_path, :source, :program, :schedule] and
+       when key in [
+              :name,
+              :path,
+              :dot_path,
+              :svg_path,
+              :json_path,
+              :mermaid_path,
+              :source,
+              :program,
+              :schedule
+            ] and
               is_binary(value),
        do: {:ok, value}
 

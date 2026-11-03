@@ -1,5 +1,13 @@
 # Equality Saturation
 
+Visual snapshots in this notebook use **render: :mermaid**:
+native JSON is converted to flowchart source and displayed by Kino.Mermaid.
+Each subgraph is an e-class; circular = anchors are argument targets, not
+constructors. Zero-based edge labels preserve argument order. Graphviz is
+not needed for these views; render: :svg / :dot remain available.
+The snapshot retains native JSON and omission metadata. Layout differs
+from Graphviz; identical child classes may collapse duplicate parent nodes.
+
 ## Intro
 
 These notebooks are Livebook adaptations of the upstream egglog tutorial from https://egraphs-good.github.io/egglog-tutorial/. The egglog examples follow the upstream chapter order closely; the extra Elixir cells are there to make normally silent egglog state visible in Livebook.
@@ -12,28 +20,37 @@ This first chapter is about the core equality-saturation loop:
 4. Run those rules until the e-graph contains useful equivalent forms.
 5. Extract a representative term from an equivalence class.
 
-Each executable egglog block is sent directly to one live mutable `Egglog.EGraph` session. The setup cell creates that session and defines a small `Tutorial` module only for displaying outputs and snapshots. The tutorial cells mostly have this shape:
+Executable blocks below are independently revisitable Program phases.
+Evaluate setup and preceding source definitions first. Each phase explicitly loads
+its previous source baseline, runs its own step on a clone, and closes the handle.
+The phase_XX values are strings, not graphs. Revisit an earlier phase without
+accumulating declarations or changing a persistent rollback stack.
+
 
 <!-- livebook:{"force_markdown":true} -->
 
 ```elixir
-egglog = """
-... <egglog code> ...
-"""
-
-{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+result = Egglog.Program.with_program(baseline, fn program ->
+  Egglog.Program.run!(program, step)
+end)
 Egglog.Output.print(result)
 ```
 
 <!-- livebook:{"break_markdown":true} -->
 
-The `egraph` value is the stateful Elixir handle to the native egglog session. If you want to experiment, edit the egglog program between the triple quotes and re-run the cell.
+Edit a step string and reevaluate that cell and its dependents. Loading a baseline
+reexecutes its earlier native commands, including checks/schedules. This is explicit
+reconstruction, not a hidden reset of a mutable graph. It costs more than incremental
+execution but keeps phase experiments independent.
 
-For visual snapshots, install Graphviz and make sure `dot` is available on `PATH`. If `dot` is unavailable, the helper returns Graphviz DOT text instead of an SVG picture.
+Mermaid views need no Graphviz. For an optional SVG comparison, use
+render: :svg with Graphviz installed; render: :auto falls back to DOT
+if Graphviz cannot render the graph.
 
 The helper deliberately keeps egglog syntax visible. The Elixir code is only notebook plumbing; congruence closure, matching, rebuilding, scheduling, and extraction all happen in native egglog.
 
-When using the published package, replace the dependency with `{:egglog_elixir, "~> 0.1"}`.
+Use the local checkout below. See [installation and execution contracts](../README.md)
+for maintained platform, publication, lifecycle and limit guidance.
 
 ```elixir
 Mix.install([
@@ -43,22 +60,30 @@ Mix.install([
 ```
 
 ```elixir
-defmodule Tutorial do
-  def render_snapshot(%{format: :svg, svg: svg}), do: Kino.HTML.new(svg)
-  def render_snapshot(%{text: text}), do: text
+render_snapshot = fn
+  %{format: :mermaid, mermaid: source} = snapshot ->
+    graph = Kino.Mermaid.new(source)
+    if snapshot.omitted in [nil, ""],
+      do: graph,
+      else: Kino.Layout.grid([Kino.Text.new("Partial snapshot: " <> snapshot.omitted), graph])
+  %{format: :svg, svg: svg} -> Kino.HTML.new(svg)
+  %{text: text} -> text
 end
 
-{:ok, egraph} = Egglog.EGraph.new()
+# Source baseline, not a native handle.
+phase_00 = ""
 ```
 
-From here on, the important API call is `Egglog.EGraph.run(egraph, egglog)`. The e-graph is stateful, so every successful run mutates the same native session.
+Execution uses Program.with_program and Program.run! directly.
+Only ordinary source/results/snapshots cross cells; native handles do not.
 
 The display helpers leave execution to native egglog:
 
-`Egglog.Output.print(result)` prints only text returned by native egglog. Successful checks may be silent; matching `{:ok, result}` confirms the batch completed successfully.
+`Egglog.Output.print(result)` prints only text returned by native egglog. Successful checks may be silent; `run!` returning normally confirms the native batch completed successfully.
 `Egglog.Snapshot.summary/1` summarizes the native JSON snapshot without reconstructing an e-graph.
 The JSON example below also inspects a small sample of the native snapshot format.
-`Tutorial.render_snapshot(snapshot)` turns an SVG snapshot into Livebook HTML when Graphviz is available.
+The render_snapshot closure displays retained snapshot data.
+It does not execute a query or retain a native handle.
 
 ## Equality Saturation
 
@@ -88,7 +113,7 @@ This declaration introduces a first-order signature:
 At this point there are no interesting `Expr` terms yet. We have described the grammar, but we have not inserted any arithmetic expressions into the e-graph.
 
 ```elixir
-egglog = """
+step_01 = """
 (datatype Expr
   (Num i64)
   (Var String)
@@ -96,8 +121,13 @@ egglog = """
   (Mul Expr Expr))
 """
 
-{:ok, _result} = Egglog.EGraph.run(egraph, egglog)
-Egglog.EGraph.snapshot!(egraph, render: :json)
+phase_01 = phase_00 <> "\n" <> step_01
+_result = Egglog.Program.with_program(phase_00, fn program ->
+  Egglog.Program.run!(program, step_01)
+end)
+Egglog.Program.with_program(phase_01, fn program ->
+  Egglog.Program.snapshot!(program, "", render: :json)
+end)
 |> Egglog.Snapshot.summary()
 ```
 
@@ -111,13 +141,18 @@ Now, let's define some simple expressions.
 ```
 
 ```elixir
-egglog = """
+step_02 = """
 (let expr1 (Mul (Num 2) (Mul (Var "x") (Num 3))))
 (let expr2 (Mul (Num 6) (Var "x")))
 """
 
-{:ok, _result} = Egglog.EGraph.run(egraph, egglog)
-Egglog.EGraph.snapshot!(egraph, render: :json)
+phase_02 = phase_01 <> "\n" <> step_02
+_result = Egglog.Program.with_program(phase_01, fn program ->
+  Egglog.Program.run!(program, step_02)
+end)
+Egglog.Program.with_program(phase_02, fn program ->
+  Egglog.Program.snapshot!(program, "", render: :json)
+end)
 |> Egglog.Snapshot.summary()
 ```
 
@@ -128,17 +163,21 @@ Now the e-graph under discussion contains two named terms:
 
 They are not equal yet. We have only inserted them.
 
-The upstream web tutorial shows the e-graph in the browser. In Livebook we ask the wrapper for a comparable snapshot. The snapshot is produced by native egglog's serializer; the helper only asks Graphviz to render it.
+The upstream web tutorial shows the e-graph in the browser. In Livebook we ask the wrapper for a comparable snapshot. The snapshot is produced by native egglog's JSON serializer; the wrapper translates it and Kino renders Mermaid.
 
 ```elixir
-Egglog.EGraph.snapshot!(egraph)
-|> Tutorial.render_snapshot()
+Egglog.Program.with_program(phase_02, fn program ->
+  Egglog.Program.snapshot!(program, "", render: :mermaid)
+end)
+|> render_snapshot.()
 ```
 
 The same native serializer can export JSON. This is more useful for programmatic inspection than for visualization. The top-level maps expose serialized e-nodes and e-class metadata.
 
 ```elixir
-graph = Egglog.EGraph.snapshot!(egraph, render: :json) |> Egglog.Snapshot.decode!()
+graph = Egglog.Program.with_program(phase_02, fn program ->
+  Egglog.Program.snapshot!(program, "", render: :json)
+end) |> Egglog.Snapshot.decode!()
 
 %{
   top_level_keys: Map.keys(graph) |> Enum.sort(),
@@ -160,16 +199,21 @@ We can use the `extract` command to print the results of expressions in `egglog`
 ```
 
 ```elixir
-egglog = """
+step_03 = """
 (extract "Hello, world!")
 (extract 42)
 (extract expr1)
 (extract expr2)
 """
 
-{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+phase_03 = phase_02 <> "\n" <> step_03
+result = Egglog.Program.with_program(phase_02, fn program ->
+  Egglog.Program.run!(program, step_03)
+end)
 Egglog.Output.print(result)
-Egglog.EGraph.snapshot!(egraph, render: :json)
+Egglog.Program.with_program(phase_03, fn program ->
+  Egglog.Program.snapshot!(program, "", render: :json)
+end)
 |> Egglog.Snapshot.summary()
 ```
 
@@ -185,14 +229,19 @@ Successful checks in egglog are assertions: they normally print nothing. Matchin
 ```
 
 ```elixir
-egglog = """
+step_04 = """
 (check (= expr1 (Mul x y)))
 (extract expr1)
 """
 
-{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+phase_04 = phase_03 <> "\n" <> step_04
+result = Egglog.Program.with_program(phase_03, fn program ->
+  Egglog.Program.run!(program, step_04)
+end)
 Egglog.Output.print(result)
-Egglog.EGraph.snapshot!(egraph, render: :json)
+Egglog.Program.with_program(phase_04, fn program ->
+  Egglog.Program.snapshot!(program, "", render: :json)
+end)
 |> Egglog.Snapshot.summary()
 ```
 
@@ -214,11 +263,14 @@ Checks can fail. For example the following check fails because `expr1` is not eq
 ```
 
 ```elixir
-egglog = """
+step_05 = """
 (fail (check (= expr1 (Add x y))))
 """
 
-{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+phase_05 = phase_04 <> "\n" <> step_05
+result = Egglog.Program.with_program(phase_04, fn program ->
+  Egglog.Program.run!(program, step_05)
+end)
 Egglog.Output.print(result)
 ```
 
@@ -231,12 +283,17 @@ Let us define some rewrite rules over our small DSL.
 ```
 
 ```elixir
-egglog = """
+step_06 = """
 (rewrite (Add x y) (Add y x))
 """
 
-{:ok, _result} = Egglog.EGraph.run(egraph, egglog)
-Egglog.EGraph.snapshot!(egraph, render: :json)
+phase_06 = phase_05 <> "\n" <> step_06
+_result = Egglog.Program.with_program(phase_05, fn program ->
+  Egglog.Program.run!(program, step_06)
+end)
+Egglog.Program.with_program(phase_06, fn program ->
+  Egglog.Program.snapshot!(program, "", render: :json)
+end)
 |> Egglog.Snapshot.summary()
 ```
 
@@ -249,12 +306,17 @@ Similarly, we can define the associativity rule for addition.
 ```
 
 ```elixir
-egglog = """
+step_07 = """
 (rewrite (Add x (Add y z)) (Add (Add x y) z))
 """
 
-{:ok, _result} = Egglog.EGraph.run(egraph, egglog)
-Egglog.EGraph.snapshot!(egraph, render: :json)
+phase_07 = phase_06 <> "\n" <> step_07
+_result = Egglog.Program.with_program(phase_06, fn program ->
+  Egglog.Program.run!(program, step_07)
+end)
+Egglog.Program.with_program(phase_07, fn program ->
+  Egglog.Program.snapshot!(program, "", render: :json)
+end)
 |> Egglog.Snapshot.summary()
 ```
 
@@ -270,14 +332,19 @@ There are two subtleties to rules in egglog.
 ```
 
 ```elixir
-egglog = """
+step_08 = """
 (let add_probe (Add (Var "x") (Num 3)))
 (fail (check (= add_probe (Add (Num 3) (Var "x")))))
 """
 
-{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+phase_08 = phase_07 <> "\n" <> step_08
+result = Egglog.Program.with_program(phase_07, fn program ->
+  Egglog.Program.run!(program, step_08)
+end)
 Egglog.Output.print(result)
-Egglog.EGraph.snapshot!(egraph, render: :json)
+Egglog.Program.with_program(phase_08, fn program ->
+  Egglog.Program.snapshot!(program, "", render: :json)
+end)
 |> Egglog.Snapshot.summary()
 ```
 
@@ -290,15 +357,20 @@ Egglog.EGraph.snapshot!(egraph, render: :json)
 ```
 
 ```elixir
-egglog = """
+step_09 = """
 (run 1)
 (check (= add_probe (Add (Num 3) (Var "x"))))
 (fail (check (= (Add (Num -2) (Num 2)) (Add (Num 2) (Num -2)))))
 """
 
-{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+phase_09 = phase_08 <> "\n" <> step_09
+result = Egglog.Program.with_program(phase_08, fn program ->
+  Egglog.Program.run!(program, step_09)
+end)
 Egglog.Output.print(result)
-Egglog.EGraph.snapshot!(egraph, render: :json)
+Egglog.Program.with_program(phase_09, fn program ->
+  Egglog.Program.snapshot!(program, "", render: :json)
+end)
 |> Egglog.Snapshot.summary()
 ```
 
@@ -312,13 +384,18 @@ Let's also define commutativity and associativity for multiplication.
 ```
 
 ```elixir
-egglog = """
+step_10 = """
 (rewrite (Mul x y) (Mul y x))
 (rewrite (Mul x (Mul y z)) (Mul (Mul x y) z))
 """
 
-{:ok, _result} = Egglog.EGraph.run(egraph, egglog)
-Egglog.EGraph.snapshot!(egraph, render: :json)
+phase_10 = phase_09 <> "\n" <> step_10
+_result = Egglog.Program.with_program(phase_09, fn program ->
+  Egglog.Program.run!(program, step_10)
+end)
+Egglog.Program.with_program(phase_10, fn program ->
+  Egglog.Program.snapshot!(program, "", render: :json)
+end)
 |> Egglog.Snapshot.summary()
 ```
 
@@ -329,11 +406,14 @@ Egglog.EGraph.snapshot!(egraph, render: :json)
 ```
 
 ```elixir
-egglog = """
+step_11 = """
 (extract (+ 1 2))
 """
 
-{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+phase_11 = phase_10 <> "\n" <> step_11
+result = Egglog.Program.with_program(phase_10, fn program ->
+  Egglog.Program.run!(program, step_11)
+end)
 Egglog.Output.print(result)
 ```
 
@@ -345,14 +425,19 @@ Egglog.Output.print(result)
 ```
 
 ```elixir
-egglog = """
+step_12 = """
 (extract (+ "1" "2"))
 (extract (+ 1.0 2.0))
 """
 
-{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+phase_12 = phase_11 <> "\n" <> step_12
+result = Egglog.Program.with_program(phase_11, fn program ->
+  Egglog.Program.run!(program, step_12)
+end)
 Egglog.Output.print(result)
-Egglog.EGraph.snapshot!(egraph, render: :json)
+Egglog.Program.with_program(phase_12, fn program ->
+  Egglog.Program.snapshot!(program, "", render: :json)
+end)
 |> Egglog.Snapshot.summary()
 ```
 
@@ -366,15 +451,20 @@ With primitives, we can define rewrite rules that talk about the semantics of op
 ```
 
 ```elixir
-egglog = """
+step_13 = """
 (rewrite (Add (Num a) (Num b))
          (Num (+ a b)))
 (rewrite (Mul (Num a) (Num b))
          (Num (* a b)))
 """
 
-{:ok, _result} = Egglog.EGraph.run(egraph, egglog)
-Egglog.EGraph.snapshot!(egraph, render: :json)
+phase_13 = phase_12 <> "\n" <> step_13
+_result = Egglog.Program.with_program(phase_12, fn program ->
+  Egglog.Program.run!(program, step_13)
+end)
+Egglog.Program.with_program(phase_13, fn program ->
+  Egglog.Program.snapshot!(program, "", render: :json)
+end)
 |> Egglog.Snapshot.summary()
 ```
 
@@ -387,15 +477,20 @@ The addition rules have already acted on `add_probe`, but the multiplication and
 ```
 
 ```elixir
-egglog = """
+step_14 = """
 (run 10)
 (extract expr1)
 (extract expr2)
 """
 
-{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+phase_14 = phase_13 <> "\n" <> step_14
+result = Egglog.Program.with_program(phase_13, fn program ->
+  Egglog.Program.run!(program, step_14)
+end)
 Egglog.Output.print(result)
-Egglog.EGraph.snapshot!(egraph, render: :json)
+Egglog.Program.with_program(phase_14, fn program ->
+  Egglog.Program.snapshot!(program, "", render: :json)
+end)
 |> Egglog.Snapshot.summary()
 ```
 
@@ -406,8 +501,10 @@ At this point the graph contains the original expressions and the alternatives c
 This snapshot shows equality saturation as growth of an equivalence structure, not as a single destructive rewrite path.
 
 ```elixir
-Egglog.EGraph.snapshot!(egraph)
-|> Tutorial.render_snapshot()
+Egglog.Program.with_program(phase_14, fn program ->
+  Egglog.Program.snapshot!(program, "", render: :mermaid)
+end)
+|> render_snapshot.()
 ```
 
 This tells `egglog` to run our rules for 10 iterations. More precisely, egglog runs the following pseudo code:
@@ -436,15 +533,20 @@ Thus, after running the rules, you should see the e-graph has grown
 ```
 
 ```elixir
-egglog = """
+step_15 = """
 (check (= expr1 expr2))
 (extract expr1)
 (extract expr2)
 """
 
-{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+phase_15 = phase_14 <> "\n" <> step_15
+result = Egglog.Program.with_program(phase_14, fn program ->
+  Egglog.Program.run!(program, step_15)
+end)
 Egglog.Output.print(result)
-Egglog.EGraph.snapshot!(egraph, render: :json)
+Egglog.Program.with_program(phase_15, fn program ->
+  Egglog.Program.snapshot!(program, "", render: :json)
+end)
 |> Egglog.Snapshot.summary()
 ```
 
@@ -453,8 +555,10 @@ The check is the important mathematical assertion: the two named terms now lie i
 Now that `expr1` and `expr2` have been checked equal, the snapshot should show their representatives living in the same e-class.
 
 ```elixir
-Egglog.EGraph.snapshot!(egraph)
-|> Tutorial.render_snapshot()
+Egglog.Program.with_program(phase_15, fn program ->
+  Egglog.Program.snapshot!(program, "", render: :mermaid)
+end)
+|> render_snapshot.()
 ```
 
 **Exercises**
@@ -471,7 +575,7 @@ Egglog.EGraph.snapshot!(egraph)
 (check (= expr3 expr4))
 ```
 
-Try this yourself first. One possible solution is below. This cell continues from the same live e-graph session as the upstream chapter.
+Try this yourself first. One possible solution is below. This cell reconstructs the preceding baseline before running the extension.
 
 ```egglog
 (rewrite (Mul a (Add b c))
@@ -486,7 +590,7 @@ Try this yourself first. One possible solution is below. This cell continues fro
 ```
 
 ```elixir
-egglog = """
+step_16 = """
 (rewrite (Mul a (Add b c))
          (Add (Mul a b) (Mul a c)))
 (let expr3 (Mul (Num 2) (Add (Var "x") (Num 3))))
@@ -498,17 +602,24 @@ egglog = """
 (extract expr4)
 """
 
-{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+phase_16 = phase_15 <> "\n" <> step_16
+result = Egglog.Program.with_program(phase_15, fn program ->
+  Egglog.Program.run!(program, step_16)
+end)
 Egglog.Output.print(result)
-Egglog.EGraph.snapshot!(egraph, render: :json)
+Egglog.Program.with_program(phase_16, fn program ->
+  Egglog.Program.snapshot!(program, "", render: :json)
+end)
 |> Egglog.Snapshot.summary()
 ```
 
 The first check is wrapped in `fail` because before running the new rule, `expr3` and `expr4` should not yet be known equal. After `run 10`, distributivity, commutativity, associativity, and constant folding are enough to put them in the same e-class.
 
 ```elixir
-Egglog.EGraph.snapshot!(egraph)
-|> Tutorial.render_snapshot()
+Egglog.Program.with_program(phase_16, fn program ->
+  Egglog.Program.snapshot!(program, "", render: :mermaid)
+end)
+|> render_snapshot.()
 ```
 
 **Birewrite.** Egglog has the `birewrite` keyword, which is similar to `rewrite`, but it allows rewriting in both directions.
@@ -526,3 +637,84 @@ For example, commutativity is naturally bidirectional. Constant folding is not: 
 Equality saturation is not normal-form rewriting. We did not choose one rewrite order and hope it was good. Instead, we accumulated many equivalent terms in one congruence structure, then asked extraction to choose a representative.
 
 The finite e-graph matters. Rules fire against represented terms and represented patterns; they do not enumerate all possible ground terms over the signature.
+
+## Before, one round, two rounds: revisit each independently
+
+The same registered theory and seeded terms are reconstructed for each query.
+First no rules execute; after one round only the inner addition folds; the outer
+addition needs the next round. Revisit these cells in any order after evaluating
+their definitions. This is query isolation, not a mutable reset.
+
+```elixir
+fold_theory = """
+(datatype Fold (Num i64) (Add Fold Fold))
+(rewrite (Add (Num a) (Num b)) (Num (+ a b)))
+"""
+fold_terms = """
+(let inner (Add (Num 1) (Num 2)))
+(let goal (Add inner (Num 4)))
+(let expected (Num 7))
+"""
+```
+
+### Before
+
+```elixir
+fold_snapshot = Egglog.Program.with_program(fold_theory, fn program ->
+  Egglog.Program.snapshot!(program, fold_terms <> """
+(fail (check (= goal expected)))
+(extract goal)
+""", render: :mermaid)
+end)
+render_snapshot.(fold_snapshot)
+```
+
+### One round
+
+```elixir
+fold_snapshot = Egglog.Program.with_program(fold_theory, fn program ->
+  Egglog.Program.snapshot!(program, fold_terms <> """
+(run 1)
+(fail (check (= goal expected)))
+(extract goal)
+""", render: :mermaid)
+end)
+render_snapshot.(fold_snapshot)
+```
+
+### Two rounds
+
+```elixir
+fold_snapshot = Egglog.Program.with_program(fold_theory, fn program ->
+  Egglog.Program.snapshot!(program, fold_terms <> """
+(run 2)
+(check (= goal expected))
+(extract goal)
+""", render: :mermaid)
+end)
+render_snapshot.(fold_snapshot)
+```
+
+The inner/outer classes change because of supplied rules and congruence.
+A failed bounded check is not an inequality proof. saturate can fail to terminate
+on expanding theories; rounds are not a wall-clock or memory limit.
+A capped picture is not a capped native execution.
+
+### Native remainder versus mathematical modulo
+
+```elixir
+remainder_result = Egglog.Program.with_program("", fn program ->
+  Egglog.Program.run!(program, """
+  (check (= (% -1 5) -1))
+  (check (= (% (+ (% -1 5) 5) 5) 4))
+  (extract (% -1 5))
+  (extract (% (+ (% -1 5) 5) 5))
+  """)
+end)
+Egglog.Output.print(remainder_result)
+```
+
+These are native primitive integers, not an additional object-language modulus
+constructor. For positive modulus 5, ((n%5)+5)%5 selects 0…4. Plain % keeps the
+negative dividend's sign. Other compound i64 expressions may overflow in
+intermediate arithmetic; do not equate i64 with arbitrary-precision integers.

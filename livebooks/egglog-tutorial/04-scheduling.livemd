@@ -1,12 +1,26 @@
 # Scheduling
 
+Visual snapshots in this notebook use **render: :mermaid**:
+native JSON is converted to flowchart source and displayed by Kino.Mermaid.
+Each subgraph is an e-class; circular = anchors are argument targets, not
+constructors. Zero-based edge labels preserve argument order. Graphviz is
+not needed for these views; render: :svg / :dot remain available.
+The snapshot retains native JSON and omission metadata. Layout differs
+from Graphviz; identical child classes may collapse duplicate parent nodes.
+
 ## Intro
 
 These notebooks are Livebook adaptations of the upstream egglog tutorial from https://egraphs-good.github.io/egglog-tutorial/. The egglog examples follow the upstream chapter order closely; the extra Elixir cells are there to make normally silent egglog state visible in Livebook.
 
-Each executable egglog block is sent directly to one live mutable `Egglog.EGraph` session. The helper below is only for displaying outputs and snapshots; the cells that change the e-graph call `Egglog.EGraph.run/3` themselves.
+Executable blocks below are independently revisitable Program phases.
+Evaluate setup and preceding source definitions first. Each phase explicitly loads
+its previous source baseline, runs its own step on a clone, and closes the handle.
+The phase_XX values are strings, not graphs. Revisit an earlier phase without
+accumulating declarations or changing a persistent rollback stack.
 
-When using the published package, replace the dependency with `{:egglog_elixir, "~> 0.1"}`.
+
+Use the local checkout below. See [installation and execution contracts](../README.md)
+for maintained platform, publication, lifecycle and limit guidance.
 
 ```elixir
 Mix.install([
@@ -16,12 +30,18 @@ Mix.install([
 ```
 
 ```elixir
-defmodule Tutorial do
-  def render_snapshot(%{format: :svg, svg: svg}), do: Kino.HTML.new(svg)
-  def render_snapshot(%{text: text}), do: text
+render_snapshot = fn
+  %{format: :mermaid, mermaid: source} = snapshot ->
+    graph = Kino.Mermaid.new(source)
+    if snapshot.omitted in [nil, ""],
+      do: graph,
+      else: Kino.Layout.grid([Kino.Text.new("Partial snapshot: " <> snapshot.omitted), graph])
+  %{format: :svg, svg: svg} -> Kino.HTML.new(svg)
+  %{text: text} -> text
 end
 
-{:ok, egraph} = Egglog.EGraph.new()
+# Source baseline, not a native handle.
+phase_00 = ""
 ```
 
 > Scope note: the executable part of this Livebook covers rulesets,
@@ -57,7 +77,7 @@ Scheduling lets us spend budget where it matters. We start by using the same exp
 ```
 
 ```elixir
-egglog = """
+step_01 = """
 (datatype Expr
     (Num BigRat)
     (Var String)
@@ -70,7 +90,10 @@ egglog = """
 (let two (bigrat (bigint 2) (bigint 1)))
 """
 
-{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+phase_01 = phase_00 <> "\n" <> step_01
+result = Egglog.Program.with_program(phase_00, fn program ->
+  Egglog.Program.run!(program, step_01)
+end)
 Egglog.Output.print(result)
 ```
 
@@ -84,12 +107,15 @@ Rulesets name groups of rules. Here we separate rules that derive semantic facts
 ```
 
 ```elixir
-egglog = """
+step_02 = """
 (ruleset optimizations)
 (ruleset analysis)
 """
 
-{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+phase_02 = phase_01 <> "\n" <> step_02
+result = Egglog.Program.with_program(phase_01, fn program ->
+  Egglog.Program.run!(program, step_02)
+end)
 Egglog.Output.print(result)
 ```
 
@@ -110,7 +136,7 @@ Here, we add `leq` rules to the `analysis` ruleset, because they don't add new `
 ```
 
 ```elixir
-egglog = """
+step_03 = """
 (relation leq (Expr Expr))
 (rule ((leq e1 e2) (leq e2 e3)) ((leq e1 e3)) :ruleset analysis)
 (rule ((= e1 (Num n1)) (= e2 (Num n2)) (<= n1 n2)) ((leq e1 e2)) :ruleset analysis)
@@ -120,7 +146,10 @@ egglog = """
       :ruleset analysis)
 """
 
-{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+phase_03 = phase_02 <> "\n" <> step_03
+result = Egglog.Program.with_program(phase_02, fn program ->
+  Egglog.Program.run!(program, step_03)
+end)
 Egglog.Output.print(result)
 ```
 
@@ -139,7 +168,7 @@ In contrast, the following axiomatic rules are doing optimizations, so we add th
 ```
 
 ```elixir
-egglog = """
+step_04 = """
 (birewrite (Add x (Add y z)) (Add (Add x y) z) :ruleset optimizations)
 (birewrite (Mul x (Mul y z)) (Mul (Mul x y) z) :ruleset optimizations)
 (rewrite (Add x y) (Add y x) :ruleset optimizations)
@@ -151,7 +180,10 @@ egglog = """
 (rewrite (Mul (Num a) (Num b)) (Num (* a b)) :ruleset optimizations)
 """
 
-{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+phase_04 = phase_03 <> "\n" <> step_04
+result = Egglog.Program.with_program(phase_03, fn program ->
+  Egglog.Program.run!(program, step_04)
+end)
 Egglog.Output.print(result)
 ```
 
@@ -193,7 +225,7 @@ Here we add the rest of the rules from the last section, but tagged with the app
 ```
 
 ```elixir
-egglog = """
+step_05 = """
 (function upper-bound (Expr) BigRat :merge (min old new))
 (function lower-bound (Expr) BigRat :merge (max old new))
 (rule ((leq e (Num n))) ((set (upper-bound e) n)) :ruleset analysis)
@@ -216,7 +248,10 @@ egglog = """
 (rule ((> (lower-bound e) zero)) ((non-zero e)) :ruleset analysis)
 """
 
-{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+phase_05 = phase_04 <> "\n" <> step_05
+result = Egglog.Program.with_program(phase_04, fn program ->
+  Egglog.Program.run!(program, step_05)
+end)
 Egglog.Output.print(result)
 ```
 
@@ -228,12 +263,15 @@ Finally, we have optimization rules that depend on the analysis rules we defined
 ```
 
 ```elixir
-egglog = """
+step_06 = """
 (rewrite (Div x x)         (Num one) :when ((non-zero x)) :ruleset optimizations)
 (rewrite (Mul x (Div y x)) y         :when ((non-zero x)) :ruleset optimizations)
 """
 
-{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+phase_06 = phase_05 <> "\n" <> step_06
+result = Egglog.Program.with_program(phase_05, fn program ->
+  Egglog.Program.run!(program, step_06)
+end)
 Egglog.Output.print(result)
 ```
 
@@ -255,7 +293,7 @@ Now consider the following program, which consists of a long sequence of additio
 ```
 
 ```elixir
-egglog = """
+step_07 = """
 (push)
 (let addition-chain 
     (Add (Var "a") (Add (Var "b") 
@@ -267,7 +305,10 @@ egglog = """
 (let expr (Mul nonzero-expr (Div addition-chain nonzero-expr)))
 """
 
-{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+phase_07 = phase_06 <> "\n" <> step_07
+result = Egglog.Program.with_program(phase_06, fn program ->
+  Egglog.Program.run!(program, step_07)
+end)
 Egglog.Output.print(result)
 ```
 
@@ -278,24 +319,31 @@ We want the following check to pass after running the rules.
 ```
 
 ```elixir
-egglog = """
+step_08 = """
 (fail (check (= expr addition-chain)))
 """
 
-{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+phase_08 = phase_07 <> "\n" <> step_08
+result = Egglog.Program.with_program(phase_07, fn program ->
+  Egglog.Program.run!(program, step_08)
+end)
 Egglog.Output.print(result)
 ```
 
 Before any schedule runs, the e-graph contains the long addition chain and the cancelling division, but not yet the analysis facts needed by the guarded rewrite.
 
 ```elixir
-Egglog.EGraph.snapshot!(egraph, render: :json)
+Egglog.Program.with_program(phase_08, fn program ->
+  Egglog.Program.snapshot!(program, "", render: :json)
+end)
 |> Egglog.Snapshot.summary()
 ```
 
 ```elixir
-Egglog.EGraph.snapshot!(egraph)
-|> Tutorial.render_snapshot()
+Egglog.Program.with_program(phase_08, fn program ->
+  Egglog.Program.snapshot!(program, "", render: :mermaid)
+end)
+|> render_snapshot.()
 ```
 
 To make this check pass, we have to first discover that `nonzero-expr` is indeed non-zero,
@@ -314,11 +362,14 @@ Therefore, if we try to run both rulesets directly, egglog will spend lots of ef
 ```
 
 ```elixir
-egglog = """
+step_09 = """
 (push)
 """
 
-{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+phase_09 = phase_08 <> "\n" <> step_09
+result = Egglog.Program.with_program(phase_08, fn program ->
+  Egglog.Program.run!(program, step_09)
+end)
 Egglog.Output.print(result)
 ```
 
@@ -332,11 +383,14 @@ Our schedule starts by saturating the analysis rules, fully propagating the `non
 ```
 
 ```elixir
-egglog = """
+step_10 = """
 (run-schedule (saturate (run analysis)))
 """
 
-{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+phase_10 = phase_09 <> "\n" <> step_10
+result = Egglog.Program.with_program(phase_09, fn program ->
+  Egglog.Program.run!(program, step_10)
+end)
 Egglog.Output.print(result)
 ```
 
@@ -345,13 +399,17 @@ After saturating only the analysis rules, the useful facts have been derived wit
 Compare this summary with the previous one: the database has learned facts, but it has avoided most term explosion.
 
 ```elixir
-Egglog.EGraph.snapshot!(egraph, render: :json)
+Egglog.Program.with_program(phase_10, fn program ->
+  Egglog.Program.snapshot!(program, "", render: :json)
+end)
 |> Egglog.Snapshot.summary()
 ```
 
 ```elixir
-Egglog.EGraph.snapshot!(egraph)
-|> Tutorial.render_snapshot()
+Egglog.Program.with_program(phase_10, fn program ->
+  Egglog.Program.snapshot!(program, "", render: :mermaid)
+end)
+|> render_snapshot.()
 ```
 
 Then, just run one iteration of the `optimizations` ruleset.
@@ -361,24 +419,31 @@ Then, just run one iteration of the `optimizations` ruleset.
 ```
 
 ```elixir
-egglog = """
+step_11 = """
 (run optimizations 1)
 """
 
-{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+phase_11 = phase_10 <> "\n" <> step_11
+result = Egglog.Program.with_program(phase_10, fn program ->
+  Egglog.Program.run!(program, step_11)
+end)
 Egglog.Output.print(result)
 ```
 
 Now the guarded optimization has had a chance to use the analysis facts. Comparing this snapshot with the previous one shows why schedule order matters.
 
 ```elixir
-Egglog.EGraph.snapshot!(egraph, render: :json)
+Egglog.Program.with_program(phase_11, fn program ->
+  Egglog.Program.snapshot!(program, "", render: :json)
+end)
 |> Egglog.Snapshot.summary()
 ```
 
 ```elixir
-Egglog.EGraph.snapshot!(egraph)
-|> Tutorial.render_snapshot()
+Egglog.Program.with_program(phase_11, fn program ->
+  Egglog.Program.snapshot!(program, "", render: :mermaid)
+end)
+|> render_snapshot.()
 ```
 
 Or equivalently,
@@ -397,12 +462,15 @@ This makes our check pass
 ```
 
 ```elixir
-egglog = """
+step_12 = """
 (check (= expr addition-chain))
 (pop)
 """
 
-{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+phase_12 = phase_11 <> "\n" <> step_12
+result = Egglog.Program.with_program(phase_11, fn program ->
+  Egglog.Program.run!(program, step_12)
+end)
 Egglog.Output.print(result)
 ```
 
@@ -422,7 +490,7 @@ The idea behind the following schedule is to always saturate analyses before run
 ```
 
 ```elixir
-egglog = """
+step_13 = """
 (run-schedule
     (repeat 2
         (saturate (run analysis))
@@ -430,7 +498,10 @@ egglog = """
 (pop)
 """
 
-{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+phase_13 = phase_12 <> "\n" <> step_13
+result = Egglog.Program.with_program(phase_12, fn program ->
+  Egglog.Program.run!(program, step_13)
+end)
 Egglog.Output.print(result)
 ```
 
@@ -453,7 +524,7 @@ Running more iterations does not help our above example per se,
 ```
 
 ```elixir
-egglog = """
+step_14 = """
 (let addition-chain 
     (Add (Var "a") (Add (Var "b") 
         (Add (Var "c") (Add (Var "d") 
@@ -466,7 +537,10 @@ egglog = """
 (let expr (Mul nonzero-expr (Div addition-chain nonzero-expr)))
 """
 
-{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+phase_14 = phase_13 <> "\n" <> step_14
+result = Egglog.Program.with_program(phase_13, fn program ->
+  Egglog.Program.run!(program, step_14)
+end)
 Egglog.Output.print(result)
 ```
 
@@ -477,11 +551,14 @@ For the purpose of this example, we add this rule
 ```
 
 ```elixir
-egglog = """
+step_15 = """
 (rewrite (Mul x (Num zero)) (Num zero) :ruleset optimizations)
 """
 
-{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+phase_15 = phase_14 <> "\n" <> step_15
+result = Egglog.Program.with_program(phase_14, fn program ->
+  Egglog.Program.run!(program, step_15)
+end)
 Egglog.Output.print(result)
 ```
 
@@ -506,7 +583,7 @@ Therefore, only running our schedule with one iteration (`repeat 1`) does not gi
 ```
 
 ```elixir
-egglog = """
+step_16 = """
 (push)
 (run-schedule
     (repeat 1
@@ -516,7 +593,10 @@ egglog = """
 (pop)
 """
 
-{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+phase_16 = phase_15 <> "\n" <> step_16
+result = Egglog.Program.with_program(phase_15, fn program ->
+  Egglog.Program.run!(program, step_16)
+end)
 Egglog.Output.print(result)
 ```
 
@@ -533,7 +613,7 @@ Instead, we need to increase the iteration number.
 ```
 
 ```elixir
-egglog = """
+step_17 = """
 (push)
 (run-schedule
     (repeat 2
@@ -543,7 +623,10 @@ egglog = """
 (pop)
 """
 
-{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+phase_17 = phase_16 <> "\n" <> step_17
+result = Egglog.Program.with_program(phase_16, fn program ->
+  Egglog.Program.run!(program, step_17)
+end)
 Egglog.Output.print(result)
 ```
 
@@ -568,7 +651,7 @@ Let's go back to this example, and run for five iterations.
 ```
 
 ```elixir
-egglog = """
+step_18 = """
 (push)
 (run-schedule
     (repeat 5
@@ -578,7 +661,10 @@ egglog = """
 (pop)
 """
 
-{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+phase_18 = phase_17 <> "\n" <> step_18
+result = Egglog.Program.with_program(phase_17, fn program ->
+  Egglog.Program.run!(program, step_18)
+end)
 Egglog.Output.print(result)
 ```
 

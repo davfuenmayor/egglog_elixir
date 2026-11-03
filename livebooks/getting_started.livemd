@@ -2,32 +2,15 @@
 
 ## Prerequisites
 
-This notebook uses `egglog_elixir`, which includes a Rustler NIF. Rustler
-compiles a small native Rust library the first time Livebook evaluates
-`Mix.install/1`.
+This notebook uses the native Rust engine through egglog_elixir.
+Supported platforms use the bundled, checksum-verified NIF.
 
-The Livebook runtime must have:
+Use the supported Elixir/OTP versions and bundled-native installation
+instructions in the library README. These diagrams use Mermaid through Kino.
+Graphviz is only needed if you switch to render: :svg.
 
-* Rust installed
-* `cargo` available on `PATH`
-* Graphviz installed, with `dot` available on `PATH`, if you want SVG e-graph pictures
-
-Check this in the same shell or container that starts Livebook:
-
-```bash
-cargo --version
-rustc --version
-dot -V
-```
-
-If Cargo is installed through rustup, make sure Livebook sees it:
-
-```bash
-export PATH="$HOME/.cargo/bin:$PATH"
-livebook server
-```
-
-When using the published package, replace the dependency with `{:egglog_elixir, "~> 0.2"}`.
+Use the local checkout below. The maintained installation, publication and
+execution guidance is in [the Livebook guide](README.md).
 
 ```elixir
 Mix.install([
@@ -35,6 +18,24 @@ Mix.install([
   {:kino, "~> 0.19.0"}
 ])
 ```
+
+Visual snapshots in this notebook use **render: :mermaid**:
+native JSON is converted to flowchart source and displayed by Kino.Mermaid.
+Each subgraph is an e-class; circular = anchors are argument targets, not
+constructors. Zero-based edge labels preserve argument order. Graphviz is
+not needed for these views; render: :svg / :dot remain available.
+The snapshot retains native JSON and omission metadata. Layout differs
+from Graphviz; identical child classes may collapse duplicate parent nodes.
+
+## Execution contract
+
+This notebook keeps theories and inputs as ordinary immutable values.
+Each independent experiment uses Program.with_program and returns results or
+snapshots, not a handle. Reevaluate a cell twice or return to it after later
+experiments without redeclaring constructors in a shared mutable graph.
+Evaluate definitions before their dependents; after editing a definition,
+reevaluate its dependents. Section 6 intentionally demonstrates sequential
+EGraph mutation inside one scoped cell.
 
 ## What This Notebook Teaches
 
@@ -64,12 +65,17 @@ The important boundary is:
 `Egglog.Output.print/2` prints native output, optionally filtered by type.
 `Egglog.Snapshot.summary/1` summarizes native JSON. Successful commands can be
 silent; these helpers do not infer results from the submitted source. The small
-helper below only displays an SVG through Kino or returns DOT text.
+helper displays Mermaid through Kino (and also accepts SVG or raw DOT).
 
 ```elixir
-defmodule GettingStarted do
-  def render_snapshot(%{format: :svg, svg: svg}), do: Kino.HTML.new(svg)
-  def render_snapshot(%{text: text}), do: text
+render_snapshot = fn
+  %{format: :mermaid, mermaid: source} = snapshot ->
+    graph = Kino.Mermaid.new(source)
+    if snapshot.omitted in [nil, ""],
+      do: graph,
+      else: Kino.Layout.grid([Kino.Text.new("Partial snapshot: " <> snapshot.omitted), graph])
+  %{format: :svg, svg: svg} -> Kino.HTML.new(svg)
+  %{text: text} -> text
 end
 ```
 
@@ -97,7 +103,6 @@ math_theory = """
 (rewrite (Mul x (Num 1)) x)
 """
 
-math = Egglog.Program.load!(math_theory)
 ```
 
 Now submit one query-local term and ask for extraction.
@@ -111,7 +116,9 @@ input = %{
   requests: [%{type: :extract, expr: "goal"}]
 }
 
-result = Egglog.Program.run!(math, input)
+result = Egglog.Program.with_program(math_theory, fn program ->
+  Egglog.Program.run!(program, input)
+end)
 
 Egglog.Output.print(result, :extract)
 Map.take(result, [:status, :stats])
@@ -128,15 +135,16 @@ Most egglog commands are quiet when they succeed. A snapshot lets us inspect
 what native egglog built.
 
 ```elixir
-snapshot = Egglog.snapshot!(math, input)
+snapshot = Egglog.Program.with_program(math_theory, fn program ->
+  Egglog.Program.snapshot!(program, input, render: :mermaid)
+end)
 
-Egglog.Snapshot.summary(
-  Egglog.snapshot!(math, input, render: :json)
-)
+Egglog.Snapshot.summary(snapshot)
+
 ```
 
 ```elixir
-GettingStarted.render_snapshot(snapshot)
+render_snapshot.(snapshot)
 ```
 
 The picture is not a rewrite trace. Equality saturation keeps several
@@ -157,24 +165,25 @@ congruence_theory = """
   (Pair Term Term))
 """
 
-cc = Egglog.Program.load!(congruence_theory)
 ```
 
 First, without an equality between `A` and `B`, the two context terms are
 distinct.
 
 ```elixir
-before_union =
-  Egglog.Program.run!(cc, %{
-    terms: %{
-      "left" => "(Pair (Wrap (A)) (A))",
-      "right" => "(Pair (Wrap (B)) (B))"
-    },
-    requests: [
-      %{type: :extract, expr: "left"},
-      %{type: :extract, expr: "right"}
-    ]
-  })
+before_union_input = %{
+  terms: %{
+    "left" => "(Pair (Wrap (A)) (A))",
+    "right" => "(Pair (Wrap (B)) (B))"
+  },
+  requests: [
+    %{type: :extract, expr: "left"},
+    %{type: :extract, expr: "right"}
+  ]
+}
+before_union = Egglog.Program.with_program(congruence_theory, fn program ->
+  Egglog.Program.run!(program, before_union_input)
+end)
 
 Egglog.Output.print(before_union)
 ```
@@ -196,15 +205,19 @@ after_union_input = %{
   ]
 }
 
-after_union = Egglog.Program.run!(cc, after_union_input)
+after_union = Egglog.Program.with_program(congruence_theory, fn program ->
+  Egglog.Program.run!(program, after_union_input)
+end)
 
 Egglog.Output.print(after_union, :extract)
 Map.take(after_union, [:status, :stats])
 ```
 
 ```elixir
-Egglog.snapshot!(cc, after_union_input)
-|> GettingStarted.render_snapshot()
+Egglog.Program.with_program(congruence_theory, fn program ->
+  Egglog.Program.snapshot!(program, after_union_input, render: :mermaid)
+end)
+|> render_snapshot.()
 ```
 
 The equality was asserted only at the leaves, but native rebuild maintains the
@@ -229,7 +242,6 @@ reachability_theory = """
       ((path x z)))
 """
 
-reach = Egglog.Program.load!(reachability_theory)
 ```
 
 Submit a small graph as query-local facts.
@@ -248,7 +260,9 @@ reach_input = %{
   ]
 }
 
-reach_result = Egglog.Program.run!(reach, reach_input)
+reach_result = Egglog.Program.with_program(reachability_theory, fn program ->
+  Egglog.Program.run!(program, reach_input)
+end)
 
 Egglog.Output.print(reach_result, :print_function)
 Map.take(reach_result, [:status, :stats])
@@ -276,7 +290,6 @@ guarded_theory = """
   :when ((non-zero x)))
 """
 
-guarded = Egglog.Program.load!(guarded_theory)
 ```
 
 Without the fact, extraction returns the original division.
@@ -288,7 +301,9 @@ without_guard_input = %{
   requests: [%{type: :extract, expr: "x"}]
 }
 
-without_guard = Egglog.Program.run!(guarded, without_guard_input)
+without_guard = Egglog.Program.with_program(guarded_theory, fn program ->
+  Egglog.Program.run!(program, without_guard_input)
+end)
 
 Egglog.Output.print(without_guard, :extract)
 ```
@@ -303,65 +318,63 @@ with_guard_input = %{
   requests: [%{type: :extract, expr: "x"}]
 }
 
-with_guard = Egglog.Program.run!(guarded, with_guard_input)
+with_guard = Egglog.Program.with_program(guarded_theory, fn program ->
+  Egglog.Program.run!(program, with_guard_input)
+end)
 
 Egglog.Output.print(with_guard, :extract)
 ```
 
 ```elixir
-Egglog.snapshot!(guarded, with_guard_input)
-|> GettingStarted.render_snapshot()
+Egglog.Program.with_program(guarded_theory, fn program ->
+  Egglog.Program.snapshot!(program, with_guard_input, render: :mermaid)
+end)
+|> render_snapshot.()
 ```
 
 The relation `non-zero` is an analysis fact. Once it is present, egglog can
 justify the equality between the division term and `(Num 1)`.
 
-## 6. Stateful Sessions
+## 6. Intentional mutable session: execute this cell in order
 
-`Egglog.Program` is query-local: every run clones the loaded base and temporary
-facts do not accumulate. For interactive work, use `Egglog.EGraph` instead.
-
-```elixir
-{:ok, egraph} =
-  Egglog.EGraph.new("""
-  (datatype Math
-    (Num i64)
-    (Add Math Math))
-  """)
-```
-
-Each successful `run/3` mutates this one native session.
+Program queries isolate experiments. EGraph intentionally accumulates state.
+The following **single scoped cell** demonstrates that behavior: its individual
+calls are sequential; repeating the whole cell creates a fresh session.
+It does not silently reset a shared graph. The snapshot returned at the end is
+ordinary data and remains usable after the native scope closes.
 
 ```elixir
-{:ok, _} = Egglog.EGraph.run(egraph, "(let x (Add (Num 1) (Num 0)))")
-{:ok, _} = Egglog.EGraph.run(egraph, "(rewrite (Add a (Num 0)) a)")
-
-{:ok, egraph_result} =
-  Egglog.EGraph.run(egraph, """
+mutable_snapshot = Egglog.EGraph.with_egraph("""
+(datatype Math (Num i64) (Add Math Math))
+(relation seen (i64))
+""", fn graph ->
+  {:ok, _} = Egglog.EGraph.run(graph, "(let x (Add (Num 1) (Num 0)))")
+  {:ok, false} = Egglog.EGraph.check(graph, "(= x (Num 1))")
+  {:ok, _} = Egglog.EGraph.run(graph, "(rewrite (Add a (Num 0)) a)")
+  {:ok, result} = Egglog.EGraph.run(graph, """
   (run 2)
   (check (= x (Num 1)))
   (extract x)
   """)
+  Egglog.Output.print(result)
+  {:ok, true} = Egglog.EGraph.check(graph, "(= x (Num 1))")
 
-Egglog.Output.print(egraph_result, :extract)
+  :ok = Egglog.EGraph.push(graph)
+  {:ok, _} = Egglog.EGraph.run(graph, "(seen 1)")
+  {:ok, true} = Egglog.EGraph.check(graph, "(seen 1)")
+  :ok = Egglog.EGraph.pop(graph)
+  {:ok, false} = Egglog.EGraph.check(graph, "(seen 1)")
+
+  Egglog.EGraph.snapshot!(graph, render: :mermaid)
+end)
+render_snapshot.(mutable_snapshot)
 ```
 
-Because the state persists, later calls can inspect what earlier calls inserted.
-
-```elixir
-{:ok, true} = Egglog.EGraph.check(egraph, "(= x (Num 1))")
-{:ok, "(Num 1)"} = Egglog.EGraph.extract(egraph, "x")
-```
-
-```elixir
-Egglog.EGraph.snapshot!(egraph)
-|> GettingStarted.render_snapshot()
-```
-
-Use the two models deliberately:
-
-* `Egglog.Program` for reproducible, isolated queries against a loaded theory.
-* `Egglog.EGraph` for REPL/Livebook sessions where state should accumulate.
+The graph is mutable inside this scope: facts and equalities persist between
+calls, and pop restores the pushed state. with_egraph invokes EGraph.close in
+after, including on failure. To experiment with a long-lived session, follow
+[the explicit sequential-session contract](README.md#execution-contracts).
+For independent comparisons, use Program; no reset API is needed.
 
 ## 7. Native Queries And Resource Lifetime
 
@@ -401,22 +414,37 @@ Egglog.EGraph.with_egraph("(relation visited (i64))\n(visited 1)", fn graph ->
 end)
 ```
 
-Close the handles used in the preceding examples when you have finished
-exploring them:
+### Closed handles and theory edits
+
+All preceding native scopes close automatically; there is no cleanup cell that
+invalidates earlier examples. Each experiment reloads its displayed theory.
+
+Returning a handle from a scope is deliberately wrong for later use. This cell
+demonstrates the expected error, then reconstructs the experiment correctly:
 
 ```elixir
-Enum.each([math, cc, reach, guarded], &Egglog.Program.close/1)
-Egglog.EGraph.close(egraph)
+closed_program = Egglog.Program.with_program(math_theory, fn program -> program end)
+{:error, {:closed, _}} = Egglog.Program.run(closed_program, input)
+
+reopened_result = Egglog.Program.with_program(math_theory, fn program ->
+  Egglog.Program.run!(program, input)
+end)
+Egglog.Output.print(reopened_result, :extract)
 ```
+
+with_program calls Program.close in after. It cannot reopen a closed handle.
+After editing a theory string, reevaluate dependent experiments: a previously
+loaded Program would retain its old theory. A query-local let/fact is available
+only in that query, never by accidentally relying on another cell's query.
 
 ## What To Try Next
 
 Natural next steps:
 
-* Open `livebooks/egglog-tutorial/01-basics.livemd` for a deeper equality
+* Open `egglog-tutorial/01-basics.livemd` for a deeper equality
   saturation walkthrough.
-* Open `livebooks/egglog-tutorial/02-datalog.livemd` for more relational
+* Open `egglog-tutorial/02-datalog.livemd` for more relational
   examples.
-* Open `livebooks/egglog-tutorial/03-analysis.livemd` for richer analysis facts
+* Open `egglog-tutorial/03-analysis.livemd` for richer analysis facts
   and guarded rewrites.
 * Change the arithmetic rules above and watch how the snapshot changes.

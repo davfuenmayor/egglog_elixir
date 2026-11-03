@@ -40,8 +40,8 @@ defmodule EgglogLivebookCheck do
                   %{__struct__: Livebook.Notebook.Cell.Code, source: source} = cell <- section.cells,
                   String.trim(source) != "", do: cell
 
-      if String.contains?(notebook.name, "TODO") do
-        [] = cells
+      if cells == [] do
+        IO.puts("REFERENCE #{name}: imported without warnings; no executable cells")
         {name, :reference_only}
       else
         true = Enum.all?(cells, &(&1.language == :elixir))

@@ -20,7 +20,7 @@ surface, not every API in the upstream workspace.
 | `set_num_threads`, `num_threads` | Load option `:num_threads`, `num_threads/1`, `EGraph.set_num_threads/2` | Per-graph configuration retained by clones; `1` is serial, `0` uses available parallelism. |
 | Native push/pop commands | `EGraph.push/2`, `pop/2` | Native rollback points; no implicit wrapper transactions. |
 | `num_tuples` | `Program.num_tuples/1`, `EGraph.num_tuples/1` | Upstream table counts, using dirty CPU scheduling. |
-| `serialize` | `run(..., snapshot: ...)`, `snapshot` helpers | Native DOT/JSON; limits map to `SerializeConfig`; native leaf inlining and primitive splitting. |
+| `serialize` | `run(..., snapshot: ...)`, `snapshot` helpers | Native DOT/JSON plus JSON-derived Mermaid; limits map to `SerializeConfig`; native leaf inlining and primitive splitting. |
 | `CommandOutput`, run reports | Run result maps | Native output text; per-call totals aggregate schedules, excluding cumulative `(print-stats)` output. Rule names remain strings. |
 
 `Egglog` delegates to `Program`; bang variants raise. `Program.with_program/3`
@@ -47,7 +47,7 @@ back if a later artifact write fails.
   proof reconstruction. Native commands supported by the pinned parser remain
   available through raw source; wrapper helpers are not the whole language API.
 
-`Snapshot` decodes and summarizes upstream JSON. SVG rendering invokes Graphviz;
+Snapshot decodes/summarizes native JSON and converts it to Mermaid without native reexecution. Program/EGraph snapshot helpers support render: :mermaid and mermaid_path exports. SVG rendering invokes Graphviz;
 no graph execution, rewriting, or extraction is reimplemented in Elixir.
 `Output.texts/2` and `Output.print/2` use only native result text. SVG rendering
 has a separate `:render_timeout` (30,000 milliseconds by default); expiration
@@ -65,14 +65,26 @@ validation, missing-file restoration, concurrent installs and relocation.
 Included bundles and platform-specific coverage are recorded in
 [MULTIPLATFORM.md](MULTIPLATFORM.md). No release assets have been published.
 
-Local verification: **78 ExUnit checks (77 tests, 1 doctest)** pass on Linux.
+Local verification: **91 ExUnit checks (90 tests, 1 doctest)** pass on Linux.
 The actual Hex package installs and executes both APIs with an empty PATH.
 Earlier native verification passed **2 panic-cleanup tests**, documentation with
 warnings as errors, Clippy, and compilation with the documented Rust 1.91.0
-minimum. See MULTIPLATFORM.md for current runtime and emulation results.
+minimum. See MULTIPLATFORM.md for platform/runtime results.
 
-`scripts/check_livebooks.exs` evaluates disposable copies in real Livebook 0.19.9
-sessions, including `Mix.install`, Kino and optional Graphviz rendering. All seven
-notebooks pass: **139 executable cells**, including Analysis with the automatic
-DOT fallback for expensive SVG layouts. These checks evaluate notebook outputs; they do not
-automate browser interaction or visually inspect diagrams.
+The P1 notebook changes add no native/reset/replay API. Chapters 01–05 use
+explicit source baselines and scoped Program queries. Getting Started includes
+intentional sequential EGraph mutation/rollback in one scoped cell.
+
+scripts/check_livebooks.exs evaluates disposable copies in real Livebook 0.19.9.
+The six executable notebooks pass **139 code cells**; the compiler guide imports
+without warnings and is reported as **reference-only (zero code cells)**.
+The cell checker passes twice without Graphviz, reruns each executable cell
+consecutively, revisits early phases after later ones, and checks theory edits
+versus reloading. Closed-handle and native push/pop expectations execute too.
+
+scripts/check_mermaid_browser.cjs uses Chromium and Kino's actual bundled
+assets to verify rendered SVG counts/escaped labels and detect parse/size
+failures. P1 validation rendered **90 diagrams** (86 captured notebook views
+including reruns/revisits plus four corner-case fixtures) with Kino 0.19.1.
+Analysis displays remain explicitly capped with omission notices; JSON summaries
+remain uncapped. Browser tooling is dev-only.

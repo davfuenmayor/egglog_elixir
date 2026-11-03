@@ -41,13 +41,14 @@ For debugging and teaching examples, use `Egglog.snapshot/3` or
 `Egglog.EGraph.snapshot/2` for the current mutable session.
 
 Snapshots ask native egglog to serialize the e-graph. The wrapper can return
-DOT, SVG, or JSON:
+DOT, SVG, JSON, or Mermaid:
 
 * `render: :auto` returns SVG when Graphviz completes successfully and falls
   back to native DOT if Graphviz is missing, fails or times out.
 * `render: :dot` returns DOT.
 * `render: :svg` requires SVG rendering.
 * `render: :json` returns egglog's JSON serialization.
+* render: :mermaid converts native JSON into Mermaid source, without Graphviz.
 
 `Egglog.Snapshot.summary/1` provides small JSON snapshot summaries for notebooks
 and tests. The wrapper itself has no Livebook or Kino dependency.
@@ -58,6 +59,38 @@ Expiration kills Graphviz. Explicit SVG requests return
 `{:error, {:graphviz_timeout, milliseconds}}`; automatic rendering returns DOT.
 This does not cancel or roll back native egglog execution. Use native snapshot
 limits to reduce diagrams, or `render: :dot` / `render: :json` to skip SVG layout.
+
+## Mermaid snapshots in Kino
+
+```elixir
+snapshot = Egglog.Program.snapshot!(program, input, render: :mermaid)
+Kino.Mermaid.new(snapshot.mermaid)
+
+# Mutable sessions use the same option:
+snapshot = Egglog.EGraph.snapshot!(egraph, render: :mermaid)
+Kino.Mermaid.new(snapshot.text)
+
+# Convert existing JSON without rerunning egglog:
+source = Egglog.Snapshot.to_mermaid!(json_snapshot)
+Kino.Mermaid.new(source)
+```
+
+Mermaid snapshots have format: :mermaid and identical text/mermaid source.
+They retain native json, original result, statistics, and omission metadata.
+mermaid_path (or path) exports .mmd; json_path exports the same native input.
+No DOT/SVG is generated in this mode. Core has no Kino dependency.
+
+Each e-class is a subgraph containing constructor nodes and a circular =
+anchor. Argument edges target class anchors rather than selected representatives;
+zero-based labels preserve argument positions. Types/let aliases label classes.
+Sharing, repeated arguments, cycles and subsumed nodes are retained. Labels are
+escaped and IDs are deterministic for a given snapshot. Layout differs from DOT.
+
+Large sources may exceed the frontend's text/edge limits or be unreadable.
+The exporter does not silently truncate. Use snapshot_max_functions /
+snapshot_max_calls_per_function and display snapshot.omitted. The Analysis
+Livebook demonstrates a capped view alongside uncapped JSON summaries.
+A Kino object alone does not prove browser-side rendering succeeded.
 
 ## Concurrency
 
@@ -72,8 +105,11 @@ There is no process-wide NIF mutex and no Elixir worker pool.
 
 ## Livebooks
 
-The library includes Livebook examples and treats them as the primary
-onboarding material.
+The library includes Livebook examples as its primary onboarding material.
+Read [installation, execution contracts and limits](livebooks/README.md) first.
+Independent experiments use scoped Program phases; Getting Started also has
+an explicit sequential EGraph accumulation/rollback lesson. Chapter 06 is a
+reference-only Rust guide with no executable setup.
 
 Start here:
 
@@ -112,7 +148,7 @@ Mac runners before binaries can be shipped and validated. musl/Alpine is exclude
 See [MULTIPLATFORM.md](MULTIPLATFORM.md) for exact build/test status and baselines.
 
 Graphviz is optional: default snapshots show SVG if `dot` is available, otherwise
-DOT text. JSON snapshots always work without Graphviz. All notebook examples
+DOT text. JSON and Mermaid work without Graphviz; Livebook views use Mermaid. All notebook examples
 run through native egglog, and the default Standalone Livebook runtime works.
 
 ```sh
@@ -180,7 +216,7 @@ before distributing; normal installations retain the pinned Git revision.
 
 ### Livebook checks
 
-The checker uses the same real Livebook session method as `rudof_elixir`.
+The checker uses real Livebook sessions and disposable notebook copies.
 Install the pinned Livebook version and start an isolated local server:
 
 ```sh
@@ -198,8 +234,11 @@ elixir --name egglog_checker@127.0.0.1 --cookie YOUR_LOCAL_COOKIE \
 ```
 
 This evaluates every notebook under `livebooks/`, including Getting Started,
-using Livebook's parser, runtime, actual `Mix.install` cells and Kino. Graphviz
-must be installed to check SVG rendering. Import warnings and evaluation errors
+using Livebook's parser, runtime, actual `Mix.install` cells and Kino.
+The reference-only compiler chapter has no code cells. The cell checker also
+reruns each executable cell consecutively and revisits early phases after later
+ones; it checks theory-edit/reload behavior as well as full notebook passes. Graphviz
+is needed only for optional SVG rendering. Import warnings and evaluation errors
 fail the check. Markdown-only examples stay Markdown; executable cells must be
 Elixir. Each session evaluates a disposable notebook copy, so autosaves cannot
 change your authoritative Livebooks, and closes afterward. The checker relies
@@ -207,3 +246,33 @@ on Livebook internals, hence the pinned version. `mix test` additionally checks
 the setup dependency paths and wrapper examples without running a server.
 Append notebook paths such as `livebooks/getting_started.livemd` to the checker
 command to rerun selected files.
+
+
+### Mermaid browser regression checks
+
+Capture actual sources passed to Kino and its bundled frontend assets:
+
+```sh
+EGGLOG_MERMAID_EXPORT_DIR=/tmp/egglog-mermaid-corpus \
+  elixir scripts/check_livebook_cells.exs --no-dot
+EGGLOG_MERMAID_EXPORT_DIR=/tmp/egglog-mermaid-corpus mix test
+```
+
+Use a fresh corpus directory. The second command adds empty, escaped-label,
+cyclic/repeated-edge and subsumed/root fixtures. The checker extracts the
+installed Kino's own Mermaid assets into corpus/kino-assets.
+
+Install the dev-only browser dependency outside the wrapper:
+
+```sh
+npm install --prefix /tmp/egglog-mermaid-browser playwright
+/tmp/egglog-mermaid-browser/node_modules/.bin/playwright install --with-deps chromium
+NODE_PATH=/tmp/egglog-mermaid-browser/node_modules \
+  node scripts/check_mermaid_browser.cjs \
+  /tmp/egglog-mermaid-corpus/kino-assets /tmp/egglog-mermaid-corpus
+```
+
+The browser check requires rendered SVG and verifies node/edge counts,
+so a parser error or an oversized-source error diagram cannot pass.
+It also verifies escaped label text. Playwright is a test tool, not a
+library dependency. Real Livebook session checks remain separate.

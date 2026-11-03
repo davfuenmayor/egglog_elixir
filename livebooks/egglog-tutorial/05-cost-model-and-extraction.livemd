@@ -1,12 +1,26 @@
 # Extraction and Cost
 
+Visual snapshots in this notebook use **render: :mermaid**:
+native JSON is converted to flowchart source and displayed by Kino.Mermaid.
+Each subgraph is an e-class; circular = anchors are argument targets, not
+constructors. Zero-based edge labels preserve argument order. Graphviz is
+not needed for these views; render: :svg / :dot remain available.
+The snapshot retains native JSON and omission metadata. Layout differs
+from Graphviz; identical child classes may collapse duplicate parent nodes.
+
 ## Intro
 
 These notebooks are Livebook adaptations of the upstream egglog tutorial from https://egraphs-good.github.io/egglog-tutorial/. The egglog examples follow the upstream chapter order closely; the extra Elixir cells are there to make normally silent egglog state visible in Livebook.
 
-Each executable egglog block is sent directly to one live mutable `Egglog.EGraph` session. The helper below is only for displaying outputs and snapshots; the cells that change the e-graph call `Egglog.EGraph.run/3` themselves.
+Executable blocks below are independently revisitable Program phases.
+Evaluate setup and preceding source definitions first. Each phase explicitly loads
+its previous source baseline, runs its own step on a clone, and closes the handle.
+The phase_XX values are strings, not graphs. Revisit an earlier phase without
+accumulating declarations or changing a persistent rollback stack.
 
-When using the published package, replace the dependency with `{:egglog_elixir, "~> 0.1"}`.
+
+Use the local checkout below. See [installation and execution contracts](../README.md)
+for maintained platform, publication, lifecycle and limit guidance.
 
 ```elixir
 Mix.install([
@@ -16,12 +30,18 @@ Mix.install([
 ```
 
 ```elixir
-defmodule Tutorial do
-  def render_snapshot(%{format: :svg, svg: svg}), do: Kino.HTML.new(svg)
-  def render_snapshot(%{text: text}), do: text
+render_snapshot = fn
+  %{format: :mermaid, mermaid: source} = snapshot ->
+    graph = Kino.Mermaid.new(source)
+    if snapshot.omitted in [nil, ""],
+      do: graph,
+      else: Kino.Layout.grid([Kino.Text.new("Partial snapshot: " <> snapshot.omitted), graph])
+  %{format: :svg, svg: svg} -> Kino.HTML.new(svg)
+  %{text: text} -> text
 end
 
-{:ok, egraph} = Egglog.EGraph.new()
+# Source baseline, not a native handle.
+phase_00 = ""
 ```
 
 > Scope note: the first half of this chapter runs through the wrapper and
@@ -45,11 +65,14 @@ In this session, we first use the part supported by the thin wrapper: constructo
 ```
 
 ```elixir
-egglog = """
+step_01 = """
 (push)
 """
 
-{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+phase_01 = phase_00 <> "\n" <> step_01
+result = Egglog.Program.with_program(phase_00, fn program ->
+  Egglog.Program.run!(program, step_01)
+end)
 Egglog.Output.print(result)
 ```
 
@@ -65,7 +88,7 @@ Here we have the same Expr language but annotated with `:cost` attributes.
 ```
 
 ```elixir
-egglog = """
+step_02 = """
 (datatype Expr
   (Num i64)
   (Var String)
@@ -74,7 +97,10 @@ egglog = """
 )
 """
 
-{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+phase_02 = phase_01 <> "\n" <> step_02
+result = Egglog.Program.with_program(phase_01, fn program ->
+  Egglog.Program.run!(program, step_02)
+end)
 Egglog.Output.print(result)
 ```
 
@@ -89,11 +115,14 @@ Let's look at how cost is computed for a concrete term in the default tree cost 
 ```
 
 ```elixir
-egglog = """
+step_03 = """
 (let expr (Add (Mul (Var "x") (Num 2)) (Num 1)))
 """
 
-{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+phase_03 = phase_02 <> "\n" <> step_03
+result = Egglog.Program.with_program(phase_02, fn program ->
+  Egglog.Program.run!(program, step_03)
+end)
 Egglog.Output.print(result)
 ```
 
@@ -117,11 +146,14 @@ We can use the `extract` command to extract the lowest cost variant of the term.
 ```
 
 ```elixir
-egglog = """
+step_04 = """
 (extract expr)
 """
 
-{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+phase_04 = phase_03 <> "\n" <> step_04
+result = Egglog.Program.with_program(phase_03, fn program ->
+  Egglog.Program.run!(program, step_04)
+end)
 Egglog.Output.print(result)
 ```
 
@@ -136,7 +168,7 @@ Let's introduces more variants with rewrites
 ```
 
 ```elixir
-egglog = """
+step_05 = """
 (rewrite (Mul x (Num 2)) (Add x x))
 
 (run 1)
@@ -144,20 +176,27 @@ egglog = """
 (extract expr)
 """
 
-{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+phase_05 = phase_04 <> "\n" <> step_05
+result = Egglog.Program.with_program(phase_04, fn program ->
+  Egglog.Program.run!(program, step_05)
+end)
 Egglog.Output.print(result)
 ```
 
 The graph now contains both the original multiplication form and the expanded addition form. Extraction chooses the cheaper representative according to constructor costs, but the e-graph keeps both equivalent nodes.
 
 ```elixir
-Egglog.EGraph.snapshot!(egraph, render: :json)
+Egglog.Program.with_program(phase_05, fn program ->
+  Egglog.Program.snapshot!(program, "", render: :json)
+end)
 |> Egglog.Snapshot.summary()
 ```
 
 ```elixir
-Egglog.EGraph.snapshot!(egraph)
-|> Tutorial.render_snapshot()
+Egglog.Program.with_program(phase_05, fn program ->
+  Egglog.Program.snapshot!(program, "", render: :mermaid)
+end)
+|> render_snapshot.()
 ```
 
 It now extracts the lower cost variant that corresponds to `x + x + 1`, which is equivalent to the original term.
@@ -168,11 +207,14 @@ It now extracts the lower cost variant that corresponds to `x + x + 1`, which is
 ```
 
 ```elixir
-egglog = """
+step_06 = """
 (pop)
 """
 
-{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+phase_06 = phase_05 <> "\n" <> step_06
+result = Egglog.Program.with_program(phase_05, fn program ->
+  Egglog.Program.run!(program, step_06)
+end)
 Egglog.Output.print(result)
 ```
 

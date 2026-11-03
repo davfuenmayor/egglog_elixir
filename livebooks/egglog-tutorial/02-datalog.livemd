@@ -1,12 +1,26 @@
 # Datalog
 
+Visual snapshots in this notebook use **render: :mermaid**:
+native JSON is converted to flowchart source and displayed by Kino.Mermaid.
+Each subgraph is an e-class; circular = anchors are argument targets, not
+constructors. Zero-based edge labels preserve argument order. Graphviz is
+not needed for these views; render: :svg / :dot remain available.
+The snapshot retains native JSON and omission metadata. Layout differs
+from Graphviz; identical child classes may collapse duplicate parent nodes.
+
 ## Intro
 
 These notebooks are Livebook adaptations of the upstream egglog tutorial from https://egraphs-good.github.io/egglog-tutorial/. The egglog examples follow the upstream chapter order closely; the extra Elixir cells are there to make normally silent egglog state visible in Livebook.
 
-Each executable egglog block is sent directly to one live mutable `Egglog.EGraph` session. The helper below is only for displaying outputs and snapshots; the cells that change the e-graph call `Egglog.EGraph.run/3` themselves.
+Executable blocks below are independently revisitable Program phases.
+Evaluate setup and preceding source definitions first. Each phase explicitly loads
+its previous source baseline, runs its own step on a clone, and closes the handle.
+The phase_XX values are strings, not graphs. Revisit an earlier phase without
+accumulating declarations or changing a persistent rollback stack.
 
-When using the published package, replace the dependency with `{:egglog_elixir, "~> 0.1"}`.
+
+Use the local checkout below. See [installation and execution contracts](../README.md)
+for maintained platform, publication, lifecycle and limit guidance.
 
 ```elixir
 Mix.install([
@@ -16,12 +30,18 @@ Mix.install([
 ```
 
 ```elixir
-defmodule Tutorial do
-  def render_snapshot(%{format: :svg, svg: svg}), do: Kino.HTML.new(svg)
-  def render_snapshot(%{text: text}), do: text
+render_snapshot = fn
+  %{format: :mermaid, mermaid: source} = snapshot ->
+    graph = Kino.Mermaid.new(source)
+    if snapshot.omitted in [nil, ""],
+      do: graph,
+      else: Kino.Layout.grid([Kino.Text.new("Partial snapshot: " <> snapshot.omitted), graph])
+  %{format: :svg, svg: svg} -> Kino.HTML.new(svg)
+  %{text: text} -> text
 end
 
-{:ok, egraph} = Egglog.EGraph.new()
+# Source baseline, not a native handle.
+phase_00 = ""
 ```
 
 ## Datalog
@@ -51,15 +71,18 @@ In this lesson, we will define multiple relations with the same name,
 ```
 
 ```elixir
-egglog = """
+step_01 = """
 (push)
 """
 
-{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+phase_01 = phase_00 <> "\n" <> step_01
+result = Egglog.Program.with_program(phase_00, fn program ->
+  Egglog.Program.run!(program, step_01)
+end)
 Egglog.Output.print(result)
 ```
 
-`push` and `pop` are native egglog commands. They operate on the same live `egraph` handle, so the stack behavior is visible across cells.
+`push` and `pop` are native egglog commands. They operate on the reconstructed native baseline, so the stack behavior is visible across cells.
 
 Let's first define relations edge and path.
  We use `(edge a b)` to mean the tuple (a, b) is in the `edge` relation.
@@ -73,12 +96,15 @@ Let's first define relations edge and path.
 ```
 
 ```elixir
-egglog = """
+step_02 = """
 (relation edge (i64 i64))
 (relation path (i64 i64))
 """
 
-{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+phase_02 = phase_01 <> "\n" <> step_02
+result = Egglog.Program.with_program(phase_01, fn program ->
+  Egglog.Program.run!(program, step_02)
+end)
 Egglog.Output.print(result)
 ```
 
@@ -91,13 +117,16 @@ We can insert edges into our relation by asserting facts:
 ```
 
 ```elixir
-egglog = """
+step_03 = """
 (edge 1 2)
 (edge 2 3)
 (edge 3 4)
 """
 
-{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+phase_03 = phase_02 <> "\n" <> step_03
+result = Egglog.Program.with_program(phase_02, fn program ->
+  Egglog.Program.run!(program, step_03)
+end)
 Egglog.Output.print(result)
 ```
 
@@ -115,12 +144,15 @@ First, if an edge from a to b exists, then it is already a proof
 ```
 
 ```elixir
-egglog = """
+step_04 = """
 (rule ((edge a b))
       ((path a b)))
 """
 
-{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+phase_04 = phase_03 <> "\n" <> step_04
+result = Egglog.Program.with_program(phase_03, fn program ->
+  Egglog.Program.run!(program, step_04)
+end)
 Egglog.Output.print(result)
 ```
 
@@ -146,12 +178,15 @@ The rule above defines the base case of the path relation. The inductive case re
 ```
 
 ```elixir
-egglog = """
+step_05 = """
 (rule ((path a b) (edge b c))
       ((path a c)))
 """
 
-{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+phase_05 = phase_04 <> "\n" <> step_05
+result = Egglog.Program.with_program(phase_04, fn program ->
+  Egglog.Program.run!(program, step_05)
+end)
 Egglog.Output.print(result)
 ```
 
@@ -164,11 +199,14 @@ Again, defining a rule does not mean running it in egglog, which may be a surpri
 ```
 
 ```elixir
-egglog = """
+step_06 = """
 (fail (check (path 1 4)))
 """
 
-{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+phase_06 = phase_05 <> "\n" <> step_06
+result = Egglog.Program.with_program(phase_05, fn program ->
+  Egglog.Program.run!(program, step_06)
+end)
 Egglog.Output.print(result)
 ```
 
@@ -181,13 +219,16 @@ But it passes after we run our rules for 10 iterations.
 ```
 
 ```elixir
-egglog = """
+step_07 = """
 (run 10)
 (check (path 1 4))
 (print-function path 20)
 """
 
-{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+phase_07 = phase_06 <> "\n" <> step_07
+result = Egglog.Program.with_program(phase_06, fn program ->
+  Egglog.Program.run!(program, step_07)
+end)
 Egglog.Output.print(result)
 ```
 
@@ -196,13 +237,17 @@ The relation table already shows the derived paths. The graph view is a compleme
 For a compact, non-visual inspection, the JSON snapshot gives counts by operator. This is useful when the graph drawing is too busy.
 
 ```elixir
-Egglog.EGraph.snapshot!(egraph, render: :json)
+Egglog.Program.with_program(phase_07, fn program ->
+  Egglog.Program.snapshot!(program, "", render: :json)
+end)
 |> Egglog.Snapshot.summary()
 ```
 
 ```elixir
-Egglog.EGraph.snapshot!(egraph)
-|> Tutorial.render_snapshot()
+Egglog.Program.with_program(phase_07, fn program ->
+  Egglog.Program.snapshot!(program, "", render: :mermaid)
+end)
+|> render_snapshot.()
 ```
 
 For many deductive rules, we do not know the number of iterations
@@ -213,11 +258,14 @@ For many deductive rules, we do not know the number of iterations
 ```
 
 ```elixir
-egglog = """
+step_08 = """
 (run-schedule (saturate (run)))
 """
 
-{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+phase_08 = phase_07 <> "\n" <> step_08
+result = Egglog.Program.with_program(phase_07, fn program ->
+  Egglog.Program.run!(program, step_08)
+end)
 Egglog.Output.print(result)
 ```
 
@@ -243,12 +291,15 @@ Does this rule compute the same relation as the original rule? How does this rul
 ```
 
 ```elixir
-egglog = """
+step_09 = """
 (pop)
 (push)
 """
 
-{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+phase_09 = phase_08 <> "\n" <> step_09
+result = Egglog.Program.with_program(phase_08, fn program ->
+  Egglog.Program.run!(program, step_09)
+end)
 Egglog.Output.print(result)
 ```
 
@@ -262,17 +313,22 @@ Our last example determines whether there is a path from one node to another,
 ```
 
 ```elixir
-egglog = """
+step_10 = """
 (function edge (i64 i64) i64 :no-merge)
 (function path (i64 i64) i64 :merge (min old new))
 """
 
-{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+phase_10 = phase_09 <> "\n" <> step_10
+result = Egglog.Program.with_program(phase_09, fn program ->
+  Egglog.Program.run!(program, step_10)
+end)
 Egglog.Output.print(result)
 ```
 
 ```elixir
-Egglog.EGraph.snapshot!(egraph) |> Tutorial.render_snapshot()
+Egglog.Program.with_program(phase_10, fn program ->
+  Egglog.Program.snapshot!(program, "", render: :mermaid)
+end) |> render_snapshot.()
 ```
 
 Here, we use a new keyword called `function` to define a table that respects the functional dependency.
@@ -304,13 +360,16 @@ Now let's insert the same edges as before, but we will assign a length to each e
 ```
 
 ```elixir
-egglog = """
+step_11 = """
 (set (edge 1 2) 10)
 (set (edge 2 3) 10)
 (set (edge 1 3) 30)
 """
 
-{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+phase_11 = phase_10 <> "\n" <> step_11
+result = Egglog.Program.with_program(phase_10, fn program ->
+  Egglog.Program.run!(program, step_11)
+end)
 Egglog.Output.print(result)
 ```
 
@@ -327,7 +386,7 @@ Let us define the edge base rule and transitive rule for the `path` function.
 ```
 
 ```elixir
-egglog = """
+step_12 = """
 (rule ((= (edge x y) len))
       ((set (path x y) len)))
 (rule ((= (path x y) xy) 
@@ -335,7 +394,10 @@ egglog = """
       ((set (path x z) (+ xy yz))))
 """
 
-{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+phase_12 = phase_11 <> "\n" <> step_12
+result = Egglog.Program.with_program(phase_11, fn program ->
+  Egglog.Program.run!(program, step_12)
+end)
 Egglog.Output.print(result)
 ```
 
@@ -348,26 +410,33 @@ Let's run our rules and check we get the desired shortest path.
 ```
 
 ```elixir
-egglog = """
+step_13 = """
 (run-schedule (saturate (run)))
 (check (= (path 1 3) 20))
 (print-function path 20)
 """
 
-{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+phase_13 = phase_12 <> "\n" <> step_13
+result = Egglog.Program.with_program(phase_12, fn program ->
+  Egglog.Program.run!(program, step_13)
+end)
 Egglog.Output.print(result)
 ```
 
 Here the interesting thing is not just reachability but the `:merge (min old new)` behavior: the direct path `1 -> 3` has cost `30`, while the derived path through `2` has cost `20`. The serialized graph lets us inspect the function rows that survived merging.
 
 ```elixir
-Egglog.EGraph.snapshot!(egraph, render: :json)
+Egglog.Program.with_program(phase_13, fn program ->
+  Egglog.Program.snapshot!(program, "", render: :json)
+end)
 |> Egglog.Snapshot.summary()
 ```
 
 ```elixir
-Egglog.EGraph.snapshot!(egraph)
-|> Tutorial.render_snapshot()
+Egglog.Program.with_program(phase_13, fn program ->
+  Egglog.Program.snapshot!(program, "", render: :mermaid)
+end)
+|> render_snapshot.()
 ```
 
 ```egglog
@@ -376,12 +445,15 @@ Egglog.EGraph.snapshot!(egraph)
 ```
 
 ```elixir
-egglog = """
+step_14 = """
 (pop)
 (push)
 """
 
-{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+phase_14 = phase_13 <> "\n" <> step_14
+result = Egglog.Program.with_program(phase_13, fn program ->
+  Egglog.Program.run!(program, step_14)
+end)
 Egglog.Output.print(result)
 ```
 
@@ -397,11 +469,14 @@ We start by defining a new, union-able sort.
 ```
 
 ```elixir
-egglog = """
+step_15 = """
 (sort Node)
 """
 
-{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+phase_15 = phase_14 <> "\n" <> step_15
+result = Egglog.Program.with_program(phase_14, fn program ->
+  Egglog.Program.run!(program, step_15)
+end)
 Egglog.Output.print(result)
 ```
 
@@ -412,11 +487,14 @@ We can then define a new constructor for our sort.
 ```
 
 ```elixir
-egglog = """
+step_16 = """
 (constructor mk (i64) Node)
 """
 
-{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+phase_16 = phase_15 <> "\n" <> step_16
+result = Egglog.Program.with_program(phase_15, fn program ->
+  Egglog.Program.run!(program, step_16)
+end)
 Egglog.Output.print(result)
 ```
 
@@ -445,7 +523,7 @@ Note: We could have equivalently written
 ```
 
 ```elixir
-egglog = """
+step_17 = """
 (relation edge (Node Node))
 (relation path (Node Node))
 
@@ -460,7 +538,10 @@ egglog = """
 (edge (mk 5) (mk 6))
 """
 
-{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+phase_17 = phase_16 <> "\n" <> step_17
+result = Egglog.Program.with_program(phase_16, fn program ->
+  Egglog.Program.run!(program, step_17)
+end)
 Egglog.Output.print(result)
 ```
 
@@ -472,11 +553,14 @@ Because we defined our nodes using a `sort`, we can "union" two nodes.
 ```
 
 ```elixir
-egglog = """
+step_18 = """
 (union (mk 3) (mk 5))
 """
 
-{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+phase_18 = phase_17 <> "\n" <> step_18
+result = Egglog.Program.with_program(phase_17, fn program ->
+  Egglog.Program.run!(program, step_18)
+end)
 Egglog.Output.print(result)
 ```
 
@@ -499,7 +583,7 @@ Egglog.Output.print(result)
 ```
 
 ```elixir
-egglog = """
+step_19 = """
 (run-schedule (saturate (run)))
 
 (check (edge (mk 3) (mk 6)))
@@ -508,7 +592,10 @@ egglog = """
 (print-function path 20)
 """
 
-{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+phase_19 = phase_18 <> "\n" <> step_19
+result = Egglog.Program.with_program(phase_18, fn program ->
+  Egglog.Program.run!(program, step_19)
+end)
 Egglog.Output.print(result)
 ```
 
@@ -517,13 +604,17 @@ This is the first example where congruence closure and Datalog-style reachabilit
 In universal-algebra terms, the `mk` terms live in a quotient. The `edge` and `path` relations are interpreted over representatives of that quotient, so equal nodes share relational consequences.
 
 ```elixir
-Egglog.EGraph.snapshot!(egraph, render: :json)
+Egglog.Program.with_program(phase_19, fn program ->
+  Egglog.Program.snapshot!(program, "", render: :json)
+end)
 |> Egglog.Snapshot.summary()
 ```
 
 ```elixir
-Egglog.EGraph.snapshot!(egraph)
-|> Tutorial.render_snapshot()
+Egglog.Program.with_program(phase_19, fn program ->
+  Egglog.Program.snapshot!(program, "", render: :mermaid)
+end)
+|> render_snapshot.()
 ```
 
 We can also give a new meaning to equivalence by adding the following rule.
@@ -535,13 +626,16 @@ We can also give a new meaning to equivalence by adding the following rule.
 ```
 
 ```elixir
-egglog = """
+step_20 = """
 (rule ((path x y)
        (path y x))
       ((union x y)))
 """
 
-{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+phase_20 = phase_19 <> "\n" <> step_20
+result = Egglog.Program.with_program(phase_19, fn program ->
+  Egglog.Program.run!(program, step_20)
+end)
 Egglog.Output.print(result)
 ```
 
@@ -559,7 +653,7 @@ This rule says that if there is a path from `x` to `y` and from `y` to `x`, then
 ```
 
 ```elixir
-egglog = """
+step_21 = """
 (run-schedule (saturate (run)))
 (check (= (mk 1) (mk 2))
        (= (mk 1) (mk 3))
@@ -567,7 +661,10 @@ egglog = """
 (print-function path 20)
 """
 
-{:ok, result} = Egglog.EGraph.run(egraph, egglog)
+phase_21 = phase_20 <> "\n" <> step_21
+result = Egglog.Program.with_program(phase_20, fn program ->
+  Egglog.Program.run!(program, step_21)
+end)
 Egglog.Output.print(result)
 ```
 

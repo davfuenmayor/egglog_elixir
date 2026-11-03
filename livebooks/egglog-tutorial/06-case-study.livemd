@@ -1,35 +1,11 @@
-# Case study: LA compiler
+# Case study: LA compiler (reference only)
 
-## Intro
+**Status: reference only.** This chapter is a reading guide to upstream Rust
+embedding and experimental extensions. It has no executable cells, no Mix
+installation and no native session. It does not implement the compiler in Elixir.
+Follow chapters 01–05 for executable native-language examples.
 
-These notebooks are Livebook adaptations of the upstream egglog tutorial from https://egraphs-good.github.io/egglog-tutorial/. The egglog examples follow the upstream chapter order closely; the extra Elixir cells are there to make normally silent egglog state visible in Livebook.
-
-Each executable egglog block is sent directly to one live mutable `Egglog.EGraph` session. The helper below is only for displaying outputs and snapshots; the cells that change the e-graph call `Egglog.EGraph.run/3` themselves.
-
-When using the published package, replace the dependency with `{:egglog_elixir, "~> 0.1"}`.
-
-```elixir
-Mix.install([
-  {:egglog_elixir, path: Path.expand("../..", __DIR__)},
-  {:kino, "~> 0.19.0"}
-])
-```
-
-```elixir
-defmodule Tutorial do
-  def render_snapshot(%{format: :svg, svg: svg}), do: Kino.HTML.new(svg)
-  def render_snapshot(%{text: text}), do: text
-end
-
-{:ok, egraph} = Egglog.EGraph.new()
-```
-
-> Scope note: this case study is about using egglog as a Rust library. It
-> involves a custom parser, AST lowering, Rust-side command construction,
-> `extract_value_with_cost_model`, custom schedulers, and custom cost models.
-> The Livebook preserves the upstream tutorial text and points to the upstream
-> Rust project, but it does not reimplement those Rust extension hooks through
-> the thin Elixir wrapper.
+[Installation and execution contracts](../README.md) · [Chapter index](README.md)
 
 ## Case study: LA compiler
 

@@ -38,6 +38,7 @@ defmodule EgglogElixir.MixProject do
         "API_COVERAGE.md",
         "KNOWN_ISSUES.md",
         "MULTIPLATFORM.md",
+        "livebooks/README.md",
         "livebooks/getting_started.livemd",
         "livebooks/egglog-tutorial/README.md",
         "livebooks/egglog-tutorial/01-basics.livemd",

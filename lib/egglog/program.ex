@@ -232,6 +232,9 @@ defmodule Egglog.Program do
         `{:error, {:graphviz_missing, message}}` if `dot` is unavailable.
       * `:dot`, `"dot"`, `false`, or `nil` - return Graphviz DOT text.
       * `:json` or `"json"` - return egglog's native JSON snapshot.
+      * `:mermaid` or `"mermaid"` - convert native JSON to Mermaid source without
+        Graphviz. Pass `snapshot.mermaid` to `Kino.Mermaid.new/1`.
+
 
     * `:render_timeout` - positive Graphviz time limit in milliseconds; defaults
       to `30_000`. Expiration terminates the renderer and returns
@@ -241,7 +244,7 @@ defmodule Egglog.Program do
       output does not invoke Graphviz.
 
       Internally, `:render` determines the native `:snapshot` format passed to
-      `run/3`: `:json` requests JSON; every other render value requests DOT.
+      `run/3`: `:json` and `:mermaid` request JSON; other values request DOT.
 
     * `:mode` - selected mode when no input `:schedule` is supplied. Defaults
       to input `:mode`, then `:default`.
@@ -278,22 +281,26 @@ defmodule Egglog.Program do
       written. Defaults to unset.
 
     * `:dot_path` - optional file path where DOT is written when DOT text is
-      available. Defaults to unset. For `render: :json`, this key is recorded
+      available. Defaults to unset. For JSON/Mermaid renders, this key is recorded
       as `nil` if provided because no DOT text is produced.
 
     * `:svg_path` - optional file path where SVG is written when SVG rendering
       succeeds. Defaults to unset. For non-SVG renders, this key is recorded as
       `nil` if provided.
 
+    * `:mermaid_path` - optional destination for Mermaid source (.mmd).
+      It is nil on renders that do not produce Mermaid. Mermaid snapshots also
+      retain native JSON, so json_path exports that same input.
+
     * `:json_path` - optional file path where JSON is written when
-      `render: :json` is used. Defaults to unset. For non-JSON renders, this
+      JSON or Mermaid rendering is used. Defaults to unset. Otherwise, this
       key is recorded as `nil` if provided.
 
   The returned snapshot map contains:
 
-    * `:format` - one of `:dot`, `:svg`, or `:json`.
+    * `:format` - one of `:dot`, `:svg`, `:json`, or `:mermaid`.
     * `:text` - the primary payload for the selected render.
-    * `:dot`, `:svg`, or `:json` - the format-specific payload when present.
+    * `:dot`, `:svg`, `:json`, or `:mermaid` - the format-specific payload when present.
     * `:omitted` - native omission metadata for capped snapshots.
     * `:stats` - snapshot-specific native stats, currently
       `:snapshot_nodes` and `:snapshot_classes` when available.

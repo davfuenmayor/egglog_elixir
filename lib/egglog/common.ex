@@ -1,7 +1,7 @@
 defmodule Egglog.Common do
   @moduledoc false
 
-  @snapshot_artifact_keys [:path, :dot_path, :svg_path, :json_path]
+  @snapshot_artifact_keys [:path, :dot_path, :svg_path, :json_path, :mermaid_path]
   @snapshot_render_keys [:render, :render_timeout]
 
   def from_native_load({:ok, ref}), do: {:ok, ref}
@@ -105,6 +105,7 @@ defmodule Egglog.Common do
           dot: Map.get(rendered, :dot),
           svg: Map.get(rendered, :svg),
           json: Map.get(rendered, :json),
+          mermaid: Map.get(rendered, :mermaid),
           omitted: native_snapshot.omitted,
           stats: Map.take(stats, [:snapshot_nodes, :snapshot_classes]),
           result: result
@@ -136,7 +137,9 @@ defmodule Egglog.Common do
     }
   end
 
-  def native_snapshot_format(render) when render in [:json, "json"], do: :json
+  def native_snapshot_format(render) when render in [:json, "json", :mermaid, "mermaid"],
+    do: :json
+
   def native_snapshot_format(_render), do: :dot
 
   def snapshot_run_opts(opts) do
@@ -244,6 +247,12 @@ defmodule Egglog.Common do
     Map.put(result, :snapshot, %{format: String.to_atom(format), text: text, omitted: omitted})
   end
 
+  defp render_snapshot(json, :json, render, _timeout) when render in [:mermaid, "mermaid"] do
+    with {:ok, mermaid} <- Egglog.Snapshot.to_mermaid(json) do
+      {:ok, %{format: :mermaid, text: mermaid, mermaid: mermaid, json: json}}
+    end
+  end
+
   defp render_snapshot(json, :json, render, _timeout) when render in [:json, "json"] do
     {:ok, %{format: :json, text: json, json: json}}
   end
@@ -316,6 +325,7 @@ defmodule Egglog.Common do
           :dot_path -> snapshot.dot
           :svg_path -> snapshot.svg
           :json_path -> snapshot.json
+          :mermaid_path -> snapshot.mermaid
           :path -> snapshot.text
         end
 
