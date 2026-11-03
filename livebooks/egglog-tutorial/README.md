@@ -1,45 +1,34 @@
-# Egglog Tutorial Livebook Clones
+# Egglog tutorial chapters
 
-These notebooks adapt the upstream egglog tutorial from <https://egraphs-good.github.io/egglog-tutorial/> to the thin `egglog_elixir` wrapper.
+Read [installation, execution contracts and limits](../README.md) first.
+These chapters adapt the upstream native-language tutorial to the thin Elixir wrapper.
 
-Open the chapters in order:
+| Chapter | Status | Main lesson |
+| --- | --- | --- |
+| [01 — Equality Saturation](01-basics.livemd) | Executable Program phases | Signatures, terms, congruence, rounds, extraction |
+| [02 — Datalog](02-datalog.livemd) | Executable Program phases | Relations, shortest paths, equality and facts, native rollback |
+| [03 — E-class Analysis](03-analysis.livemd) | Executable Program phases | Derived facts and guarded rewrites |
+| [04 — Scheduling](04-scheduling.livemd) | Executable native schedules; marked experimental sections reference-only | Rulesets, run/repeat/saturate |
+| [05 — Extraction and Cost](05-cost-model-and-extraction.livemd) | Static costs executable; dynamic-cost sections reference-only | Representative selection and cost |
+| [06 — LA compiler](06-case-study.livemd) | Reference only; no executable cells | Rust embedding and native extension hooks |
 
-- [Equality Saturation](livebooks/egglog-tutorial/01-basics.livemd)
-- [Datalog](livebooks/egglog-tutorial/02-datalog.livemd)
-- [E-class analysis](livebooks/egglog-tutorial/03-analysis.livemd)
-- [Scheduling](livebooks/egglog-tutorial/04-scheduling.livemd)
-- [Extraction and Cost](livebooks/egglog-tutorial/05-cost-model-and-extraction.livemd)
-- [Case study: LA compiler](livebooks/egglog-tutorial/06-case-study.livemd)
+The native examples remain visible in their teaching order. Each executable
+phase reconstructs its explicitly named immutable source baseline, uses
+Program.with_program/run!, and returns ordinary data after closing the handle.
+Views reconstruct the phase they name; they do not inspect a hidden mutable graph.
+Evaluate preceding definitions before dependents, and reevaluate dependents after
+edits. See [Getting Started](../getting_started.livemd) for intentional sequential
+EGraph accumulation and push/pop inside a scoped cell.
 
-Each chapter is standalone and installs `egglog_elixir` from the library root using a path relative to the notebook.
+Mermaid views run in Kino and require no Graphviz. Partial Analysis views display
+native omission metadata. Helpers only display returned snapshots/output; they do
+not synthesize check results or implement equality reasoning.
 
-## Adaptation Notes
+## Native extension boundary
 
-These Livebooks are close to the cloned upstream `.egg` sources, but they are not byte-for-byte conversions.
-
-- The egglog command blocks stay visible and in the original chapter order wherever possible.
-- Each chapter uses one live `Egglog.EGraph` session, so `(push)`, `(pop)`, rules, facts, checks, and extraction operate on the same mutable native e-graph that a direct interactive egglog session would use.
-- Cells that change the e-graph call the public API directly: `Egglog.EGraph.new/0`, `Egglog.EGraph.run/2`, `Egglog.EGraph.snapshot!/2`, and `Egglog.EGraph.num_tuples/1`.
-- The small `Tutorial` modules are display-only glue for Livebook output, SVG rendering, and JSON-summary helpers for inspecting the current e-graph.
-- Several silent `(check ...)` commands are followed by small Elixir summaries so beginners can see whether a check succeeded without reading an exception trace.
-- Snapshot cells render SVG in Livebook when Graphviz is installed; otherwise they fall back to textual DOT output.
-
-## Scope Notes
-
-The first three chapters are ordinary egglog-language tutorials and are executable
-through the thin wrapper.
-
-Chapter 4 is executable through the scheduling material based on rulesets,
-`run-schedule`, `saturate`, `repeat`, and `run`. Upstream also discusses
-experimental scheduler constructs such as `let-scheduler`, `run-with`, and
-`back-off`; those blocks are preserved as reference text rather than executed.
-
-Chapter 5 is executable for ordinary extraction and constructor `:cost`
-annotations. The dynamic-cost material, including `with-dynamic-cost`,
-`set-cost`, and `DynamicCostModel`, depends on experimental/native extension
-features and is kept as reference text.
-
-Chapter 6 is a Rust-library case study. It covers a custom parser, AST lowering,
-Rust-side extraction, custom schedulers, and custom cost models. The Livebook is
-a guided map of that upstream project, not an Elixir reimplementation of those
-Rust extension hooks.
+Standard datatype/relation/rule commands, rulesets, schedules and static
+constructor costs are executable. Experimental back-off/custom schedulers,
+dynamic cost models and Rust extension hooks are explicitly marked reading
+material. Chapter 06 describes an upstream Rust compiler; it does not implement
+that compiler in Elixir. No new wrapper reset, scheduler or reasoning engine is
+needed for the phase-based notebook execution.

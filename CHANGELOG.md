@@ -2,6 +2,19 @@
 
 ## Unreleased (0.2.0)
 
+* Make notebook experiments revisitable with explicit source baselines and scoped
+  Program queries; keep intentional EGraph mutation/rollback in Getting Started.
+* Centralize onboarding/lifecycle/limit guidance, correct navigation and remove
+  hypothetical package advice; mark the Rust compiler guide reference-only.
+* Test consecutive cell reruns, early-phase revisits, closed handles and theory
+  edits/reloads; add before/one/two rounds and negative-remainder examples.
+
+* JSON-to-Mermaid snapshots with render: :mermaid, mermaid_path exports, and
+  Snapshot.to_mermaid/1 for existing JSON. Preserves classes, ordered
+  class-targeted edges, aliases and metadata without Graphviz.
+* Livebook visual examples use Kino.Mermaid; the Analysis views show explicit
+  omission notices for capped views.
+
 * Pin egglog 3.0.0 revision `b912caa9694c0c029f9ae3d91db0adc8824e14f5`.
 * Native declaration inspection, pattern queries, and mutable table clearing.
 * Per-graph thread configuration, including load-time settings retained by clones.

@@ -3,8 +3,8 @@ defmodule Egglog.Snapshot do
   Helpers for egglog JSON snapshots.
 
   The wrapper asks native egglog to serialize snapshots. This module only
-  decodes that JSON and computes small summaries that are convenient in tests,
-  notebooks, and debugging sessions.
+  decodes that JSON, exports Mermaid flowcharts, and computes small summaries
+  that are convenient in tests, notebooks, and debugging sessions.
   """
 
   @doc """
@@ -29,6 +29,36 @@ defmodule Egglog.Snapshot do
       {:ok, decoded} -> decoded
       {:error, reason} -> raise "failed to decode egglog JSON snapshot: #{inspect(reason)}"
     end
+  end
+
+  @doc """
+  Converts native snapshot JSON to Mermaid flowchart source without rerunning
+  egglog or invoking Graphviz. Accepts the same inputs as decode/1.
+
+  E-classes are subgraphs containing constructor nodes and a circular =
+  argument anchor. Zero-based edge labels preserve argument order. Edges
+  target the child's class anchor, not a particular representative. Native
+  let aliases and types appear in class titles; subsumed nodes are dashed.
+
+  Pass the result to Kino.Mermaid.new/1 (Kino is an optional caller dependency).
+  Layout differs from Graphviz. Native snapshot limits/leaf inlining apply
+  before conversion; inspect omission metadata for capped snapshots.
+
+  Invalid JSON/schema or dangling children return an error. IDs are generated
+  deterministically for a given snapshot, and labels are escaped.
+  """
+  def to_mermaid(snapshot) do
+    case decode(snapshot) do
+      {:ok, graph} -> Egglog.Mermaid.render(graph)
+      {:error, reason} -> {:error, {:invalid_snapshot, reason}}
+    end
+  end
+
+  @doc "Bang variant of to_mermaid/1."
+  def to_mermaid!(snapshot) do
+    snapshot
+    |> to_mermaid()
+    |> Egglog.Common.bang("failed to convert snapshot to Mermaid")
   end
 
   @doc """

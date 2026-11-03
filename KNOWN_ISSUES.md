@@ -40,10 +40,19 @@ Graphviz can exceed the rendering deadline while laying out the Analysis
 notebook's large graphs. Automatic rendering kills the renderer after 30 seconds
 by default and returns native DOT, allowing the lesson to continue. Explicit
 `render: :svg` requests return `{:error, {:graphviz_timeout, 30_000}}`;
-callers can set `:render_timeout`. All seven notebooks pass the real Livebook
-0.19.9 runtime check with this fallback.
+callers can set `:render_timeout`. Current notebook views use Mermaid instead; Graphviz fallback remains
+available when requesting automatic SVG rendering.
 
-DOT/JSON output avoids SVG layout. Native snapshot limits
+DOT/JSON/Mermaid output avoids Graphviz layout. Native snapshot limits
 (`snapshot_max_functions`, `snapshot_max_calls_per_function`) can reduce the
-diagram, but the notebook currently requests the full graph. Notebook content
-remains unchanged.
+diagram. Current Analysis Mermaid views use explicit limits and show omission
+metadata; their JSON summaries inspect the full graph. The original
+object-language programs and reasoning examples are unchanged.
+
+## Mermaid frontend limits
+
+The wrapper emits complete Mermaid source from the requested native JSON.
+Browser Mermaid has text/edge/layout limits independent of native egglog.
+Very large snapshots may exceed those limits. Use explicit serialization
+limits and display omission metadata, as in the Analysis notebook.
+The exporter never silently caps a graph or presents a partial view as complete.
