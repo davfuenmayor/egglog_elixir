@@ -5,7 +5,10 @@ defmodule Egglog.Common do
   @snapshot_render_keys [:render, :render_timeout]
 
   def from_native_load({:ok, ref}), do: {:ok, ref}
+  def from_native_load({:error, _reason} = error), do: error
   def from_native_load({:error, reason, message}), do: {:error, {reason, message}}
+
+  def from_native_result({:error, _reason} = error, _limit), do: error
 
   def from_native_result({:error, reason, message}, _limit), do: {:error, {reason, message}}
 
@@ -28,22 +31,28 @@ defmodule Egglog.Common do
   end
 
   def from_native_close(:ok), do: :ok
+  def from_native_close({:error, _reason} = error), do: error
   def from_native_close({:error, reason, message}), do: {:error, {reason, message}}
 
   def from_native_value({:ok, sort, kind, value}), do: {:ok, value(sort, kind, value)}
+  def from_native_value({:error, _reason} = error), do: error
   def from_native_value({:error, reason, message}), do: {:error, {reason, message}}
 
   def from_native_lookup({:ok, false, _sort, _kind, _value}), do: {:ok, nil}
   def from_native_lookup({:ok, true, sort, kind, value}), do: {:ok, value(sort, kind, value)}
+  def from_native_lookup({:error, _reason} = error), do: error
   def from_native_lookup({:error, reason, message}), do: {:error, {reason, message}}
 
   def from_native_count({:ok, count}), do: {:ok, count}
+  def from_native_count({:error, _reason} = error), do: error
   def from_native_count({:error, reason, message}), do: {:error, {reason, message}}
 
   def from_native_functions({:ok, functions}), do: {:ok, Enum.map(functions, &function/1)}
+  def from_native_functions({:error, _reason} = error), do: error
   def from_native_functions({:error, reason, message}), do: {:error, {reason, message}}
   def from_native_function({:ok, nil}), do: {:ok, nil}
   def from_native_function({:ok, function}), do: {:ok, function(function)}
+  def from_native_function({:error, _reason} = error), do: error
   def from_native_function({:error, reason, message}), do: {:error, {reason, message}}
 
   def from_native_bindings({:ok, rows}) do
@@ -53,6 +62,7 @@ defmodule Egglog.Common do
      end)}
   end
 
+  def from_native_bindings({:error, _reason} = error), do: error
   def from_native_bindings({:error, reason, message}), do: {:error, {reason, message}}
 
   def query_inputs(vars, facts) when is_list(vars) and is_list(facts) do

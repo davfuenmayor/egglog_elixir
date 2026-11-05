@@ -26,6 +26,8 @@ defmodule Egglog.EGraph do
   A caught panic discards the mutable graph and stops the server. Further calls
   return `{:error, {:closed, message}}`. Unexpected server exits retain their
   reason as `{:error, {:session_exit, reason}}`. Validation errors occur before execution.
+  Parser failures include structured source locations; see `Egglog` for the
+  error shape and coordinate conventions.
   Run outputs and decoded values have the same shapes as `Egglog.Program`.
 
   `push/2` and `pop/2` delegate to native egglog's `(push)` and `(pop)`

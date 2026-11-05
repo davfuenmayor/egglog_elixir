@@ -2,6 +2,11 @@
 
 ## Unreleased (0.2.0)
 
+* Preserve native parser source spans as `{:error, {reason, message, location}}`
+  across parsing, loading, running and inspection, including included files.
+  Locations expose UTF-8 byte ranges and line/column coordinates without
+  parsing diagnostic text. Non-parser error shapes remain unchanged.
+
 * Make notebook experiments revisitable with explicit source baselines and scoped
   Program queries; keep intentional EGraph mutation/rollback in Getting Started.
 * Centralize onboarding/lifecycle/limit guidance, correct navigation and remove

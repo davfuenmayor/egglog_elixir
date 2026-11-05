@@ -11,9 +11,9 @@ Normal installs do not invoke Cargo or contact GitHub releases.
 
 | Target | Build and validation |
 | --- | --- |
-| Linux x86-64, glibc | Included; 78 checks passed, all seven actual Livebook runtimes passed |
-| Linux ARM64, glibc | Included; 78 checks validated under QEMU, all seven notebook cell checks passed |
-| Windows x86-64 | Included; 75 checks passed under Wine, three POSIX renderer probes skipped |
+| Linux x86-64, glibc | Included; 100 checks passed with structured parse diagnostics; documentation builds without warnings |
+| Linux ARM64, glibc | Included; rebuilt for structured parse diagnostics; runtime revalidation pending (previous revision: 78 checks under QEMU) |
+| Windows x86-64 | Included; rebuilt for structured parse diagnostics; runtime revalidation pending (previous revision: 75 checks under Wine) |
 | macOS Intel | Native recipe prepared; Mac runner required |
 | macOS Apple Silicon | Native recipe prepared; Mac runner required |
 

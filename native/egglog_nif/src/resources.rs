@@ -35,7 +35,7 @@ pub struct ParsedProgramResource {
 #[rustler::resource_impl]
 impl Resource for ParsedProgramResource {}
 
-pub fn load_egraph(source: &str, proofs: bool, num_threads: usize) -> Result<EGraph, String> {
+pub fn load_egraph(source: &str, proofs: bool, num_threads: usize) -> Result<EGraph, NativeError> {
     let mut egraph = if proofs {
         EGraph::new_with_proofs()
     } else {
@@ -47,7 +47,7 @@ pub fn load_egraph(source: &str, proofs: bool, num_threads: usize) -> Result<EGr
     if !source.trim().is_empty() {
         egraph
             .parse_and_run_program(None, source)
-            .map_err(|err| err.to_string())?;
+            .map_err(NativeError::invalid_theory)?;
     }
 
     Ok(egraph)

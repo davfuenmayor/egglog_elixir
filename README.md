@@ -6,6 +6,30 @@ The wrapper is intentionally small. Elixir does not implement congruence
 closure, e-matching, Datalog evaluation, equality saturation, scheduling, or
 extraction. Those stay inside native egglog.
 
+## Structured parse errors
+
+Parser failures preserve egglog’s diagnostic message and expose its source span:
+
+```elixir
+{:error, {:invalid_theory, message, location}} = Egglog.parse(")")
+# location:
+# %{file: nil, start_byte: 0, end_byte: 1,
+#   start_line: 1, start_column: 1, end_line: 1, end_column: 2}
+```
+
+The same shape applies to loading. Execution and inspection use `:native_error`
+instead of `:invalid_theory`. Locations come directly from native egglog, including
+filenames for included files. Byte offsets are zero-based UTF-8 offsets; lines
+and columns are one-based, and both byte and position ranges have exclusive ends.
+Columns count Unicode code points, not bytes or graphemes; tabs count as one.
+EOF ranges may be empty. If no user-source span exists, the location is nil.
+
+Positions refer to the native parser’s input. For standalone expressions, facts,
+or lookup arguments, they are local to that string. For structured requests,
+they refer to the generated egglog command sequence; no field-level remapping is
+performed. Other error shapes and failed-check behavior remain unchanged.
+See `Egglog` module documentation for the full contract.
+
 ## API Shape
 
 The library exposes two main models:

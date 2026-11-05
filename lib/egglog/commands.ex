@@ -20,11 +20,14 @@ defmodule Egglog.Commands do
 
   @doc """
   Parses egglog source into a reusable command handle.
+
+  Parser failures return `{:error, {:invalid_theory, message, location}}`.
+  See `Egglog` for source-span fields and coordinate conventions.
   """
   def parse(source) when is_binary(source) do
     case Native.parse_program(source) do
       {:ok, ref, count} -> {:ok, %__MODULE__{ref: ref, count: count, source: source}}
-      {:error, reason, message} -> {:error, {reason, message}}
+      error -> Common.from_native_load(error)
     end
   end
 
