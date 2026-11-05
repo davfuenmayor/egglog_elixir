@@ -37,7 +37,7 @@ fn parse_program<'a>(env: Env<'a>, source: String) -> Term<'a> {
         let mut egraph = EGraph::default();
         let commands = egraph
             .parse_program(None, &source)
-            .map_err(|err| NativeError::InvalidTheory(err.to_string()))?;
+            .map_err(NativeError::invalid_theory)?;
         let count = commands.len() as i64;
         let resource = ResourceArc::new(ParsedProgramResource { commands });
         Ok((atoms::ok(), resource, count))
@@ -47,8 +47,7 @@ fn parse_program<'a>(env: Env<'a>, source: String) -> Term<'a> {
 #[rustler::nif(schedule = "DirtyCpu")]
 fn load_program<'a>(env: Env<'a>, source: String, proofs: bool, num_threads: usize) -> Term<'a> {
     respond(env, || {
-        let egraph = resources::load_egraph(&source, proofs, num_threads)
-            .map_err(NativeError::InvalidTheory)?;
+        let egraph = resources::load_egraph(&source, proofs, num_threads)?;
         let inner = ProgramInner { base: egraph };
         let resource = ResourceArc::new(ProgramResource {
             inner: Mutex::new(Some(inner)),
@@ -60,8 +59,7 @@ fn load_program<'a>(env: Env<'a>, source: String, proofs: bool, num_threads: usi
 #[rustler::nif(schedule = "DirtyCpu")]
 fn new_egraph<'a>(env: Env<'a>, source: String, proofs: bool, num_threads: usize) -> Term<'a> {
     respond(env, || {
-        let egraph = resources::load_egraph(&source, proofs, num_threads)
-            .map_err(NativeError::InvalidTheory)?;
+        let egraph = resources::load_egraph(&source, proofs, num_threads)?;
         let resource = ResourceArc::new(EGraphResource {
             inner: Mutex::new(Some(egraph)),
         });

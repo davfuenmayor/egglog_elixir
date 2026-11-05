@@ -54,7 +54,7 @@ defmodule Egglog.NativeApiTest do
       assert [%{"v" => %{value: 42}}] = EGraph.query!(graph, [v: "i64"], ["(= (score 1) v)"])
       assert {:error, {:native_error, _}} = EGraph.query(graph, [x: "unknown"], ["(edge x 2)"])
       assert {:error, {:native_error, _}} = EGraph.query(graph, [x: "String"], ["(edge x 2)"])
-      assert {:error, {:native_error, _}} = EGraph.query(graph, [], ["(invalid"])
+      assert {:error, {:native_error, _, _}} = EGraph.query(graph, [], ["(invalid"])
       assert {:error, {:invalid_option, _}} = EGraph.query(graph, [{:x, "i64"}, {"x", "i64"}], [])
       assert [%{}] = EGraph.query!(graph, [], ["(edge 1 2)"])
     end)

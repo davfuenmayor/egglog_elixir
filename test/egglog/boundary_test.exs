@@ -134,7 +134,9 @@ defmodule Egglog.BoundaryTest do
 
     assert_receive {:closed_program, program}
     assert {:error, {:closed, _}} = Program.num_tuples(program)
-    assert {:error, {:invalid_theory, _}} = Program.with_program("(invalid", fn _ -> flunk() end)
+
+    assert {:error, {:invalid_theory, _, _}} =
+             Program.with_program("(invalid", fn _ -> flunk() end)
   end
 
   test "invalid options cannot mutate native state" do

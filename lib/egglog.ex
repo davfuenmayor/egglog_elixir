@@ -17,6 +17,37 @@ defmodule Egglog do
       ...> end)
       {:ok, %{sort: "i64", type: :integer, value: 3}}
 
+  ## Parse errors
+
+  Native parser failures return `{:error, {reason, message, location}}`.
+  `reason` is `:invalid_theory` when parsing/loading a base and `:native_error`
+  when running or inspecting a query. `message` preserves egglog's complete
+  diagnostic text. `location` is a map read directly from the native source span:
+
+      %{
+        file: nil,
+        start_byte: 0, end_byte: 1,
+        start_line: 1, start_column: 1,
+        end_line: 1, end_column: 2
+      }
+
+  Byte offsets are zero-based UTF-8 offsets; the range is end-exclusive.
+  Lines and columns are one-based; columns count Unicode code points, with a
+  tab counting as one character. End positions are also exclusive. An EOF
+  diagnostic may have an empty range. `file` is `nil` for unnamed source and
+  carries the native filename for errors in included files. If egglog supplies
+  no user-source span, `location` is `nil`.
+
+  Locations refer to the string parsed by egglog: a raw source string, a
+  standalone expression/fact/lookup argument, a wrapper-generated command
+  sequence, or an included file. Structured requests may generate command
+  prefixes; offsets are not remapped onto individual input fields.
+
+  Other errors retain `{:error, {reason, message}}` (or their documented
+  wrapper-specific shapes). Bang functions still raise `RuntimeError` and
+  include the structured diagnostic. Failed native equality checks keep their
+  existing `:check_failed` category; check helpers still return `{:ok, false}`.
+
   Native command text and schedules remain egglog's own language; the wrapper
   does not implement an optimizer or a second execution engine.
   """

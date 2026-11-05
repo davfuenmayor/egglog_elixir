@@ -23,7 +23,9 @@ defmodule Egglog.Program do
   Ordinary native errors leave the base available.
 
   Invalid options return `{:error, {:invalid_option, message}}` before execution.
-  Native errors retain their text. Failed checks use `:check_failed`; caught
+  Native parser errors return `{:error, {reason, message, location}}`; see
+  `Egglog` for source-span fields and coordinate conventions. Other native
+  errors retain their text. Failed checks use `:check_failed`; caught
   panics use `:panic` and discard the loaded base.
   """
 

@@ -32,7 +32,7 @@ pub fn execute_program(
     } else {
         egraph
             .parse_program(None, program)
-            .map_err(|err| NativeError::Native(err.to_string()))?
+            .map_err(NativeError::from)?
     };
 
     execute_commands(

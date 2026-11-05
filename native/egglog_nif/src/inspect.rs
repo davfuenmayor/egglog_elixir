@@ -12,10 +12,8 @@ pub fn eval_expr(egraph: &mut EGraph, expr: &str) -> Result<NativeValue, NativeE
     let parsed = egraph
         .parser
         .get_expr_from_string(None, expr)
-        .map_err(|err| NativeError::Native(err.to_string()))?;
-    let (sort, value) = egraph
-        .eval_expr(&parsed)
-        .map_err(|err| NativeError::Native(err.to_string()))?;
+        .map_err(NativeError::from)?;
+    let (sort, value) = egraph.eval_expr(&parsed).map_err(NativeError::from)?;
     Ok(encode_value(egraph, sort.name(), value))
 }
 
@@ -57,10 +55,8 @@ pub fn lookup_function(
         let parsed = egraph
             .parser
             .get_expr_from_string(None, &expr)
-            .map_err(|err| NativeError::Native(err.to_string()))?;
-        let (sort, value) = egraph
-            .eval_expr(&parsed)
-            .map_err(|err| NativeError::Native(err.to_string()))?;
+            .map_err(NativeError::from)?;
+        let (sort, value) = egraph.eval_expr(&parsed).map_err(NativeError::from)?;
 
         if sort.name() != expected_sort {
             return Err(NativeError::Native(format!(
@@ -132,7 +128,7 @@ pub fn query(
             graph
                 .parser
                 .get_fact_from_string(None, &fact)
-                .map_err(|error| NativeError::Native(error.to_string()))
+                .map_err(NativeError::from)
         })
         .collect::<Result<Vec<_>, _>>()?;
     let bindings = vars

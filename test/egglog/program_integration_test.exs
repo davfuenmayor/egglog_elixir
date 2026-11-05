@@ -796,7 +796,9 @@ defmodule Egglog.ProgramIntegrationTest do
   end
 
   test "invalid theory and closed programs return structured errors" do
-    assert {:error, {:invalid_theory, message}} = Program.load("(definitely-not-egglog")
+    assert {:error, {:invalid_theory, message, _location}} =
+             Program.load("(definitely-not-egglog")
+
     assert is_binary(message)
 
     assert {:ok, program} = Program.load(@math_theory)
