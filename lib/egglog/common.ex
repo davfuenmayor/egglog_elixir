@@ -150,6 +150,9 @@ defmodule Egglog.Common do
   def native_snapshot_format(render) when render in [:json, "json", :mermaid, "mermaid"],
     do: :json
 
+  def native_snapshot_format(render) when render in [:auto, "auto", true],
+    do: if(Egglog.Graphviz.executable(), do: :dot, else: :json)
+
   def native_snapshot_format(_render), do: :dot
 
   def snapshot_run_opts(opts) do
@@ -257,7 +260,8 @@ defmodule Egglog.Common do
     Map.put(result, :snapshot, %{format: String.to_atom(format), text: text, omitted: omitted})
   end
 
-  defp render_snapshot(json, :json, render, _timeout) when render in [:mermaid, "mermaid"] do
+  defp render_snapshot(json, :json, render, _timeout)
+       when render in [:mermaid, "mermaid", :auto, "auto", true] do
     with {:ok, mermaid} <- Egglog.Snapshot.to_mermaid(json) do
       {:ok, %{format: :mermaid, text: mermaid, mermaid: mermaid, json: json}}
     end
@@ -277,12 +281,14 @@ defmodule Egglog.Common do
 
   defp render_snapshot(dot, :dot, render, timeout)
        when render in [:auto, "auto", :svg, "svg", true] do
-    case System.find_executable("dot") do
+    case Egglog.Graphviz.executable() do
       nil when render in [:auto, "auto", true] ->
         {:ok, %{format: :dot, text: dot, dot: dot}}
 
       nil ->
-        {:error, {:graphviz_missing, "could not find dot executable on PATH"}}
+        {:error,
+         {:graphviz_missing,
+          "could not find Graphviz dot (EGGLOG_GRAPHVIZ_DOT, GRAPHVIZ_DOT or PATH)"}}
 
       _dot ->
         case render_svg(dot, timeout) do

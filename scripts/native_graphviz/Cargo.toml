@@ -1,0 +1,12 @@
+[package]
+name = "egglog_graph_parity"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# Dev-only oracle, matching native/egglog_nif/Cargo.lock. This runs the real
+# native DOT exporter on captured JSON; it never reruns an egglog program.
+[dependencies]
+egraph-serialize = { version = "=0.3.0", features = ["graphviz"] }
+graphviz-rust = "=0.9.8"
+serde_json = "=1.0.150"

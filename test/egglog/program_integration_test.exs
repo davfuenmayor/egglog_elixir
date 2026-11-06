@@ -751,14 +751,16 @@ defmodule Egglog.ProgramIntegrationTest do
           snapshot_inline_leaves: 1
         )
 
-      assert File.read!(dot_path) == snapshot.dot
-
-      if System.find_executable("dot") do
+      if Egglog.Graphviz.executable() do
+        assert File.read!(dot_path) == snapshot.dot
         assert snapshot.format == :svg
         assert snapshot.svg =~ "<svg"
         assert File.read!(svg_path) == snapshot.svg
       else
-        assert snapshot.format == :dot
+        assert snapshot.format == :mermaid
+        assert snapshot.dot == nil
+        assert snapshot.dot_path == nil
+        assert snapshot.mermaid =~ "flowchart"
         assert snapshot.svg == nil
         assert snapshot.svg_path == nil
       end

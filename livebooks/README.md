@@ -24,9 +24,13 @@ Install the documented Livebook version and open, from the project root:
 livebook server livebooks/getting_started.livemd
 ~~~
 
-Use the default Standalone runtime. Visual examples use Kino.Mermaid; Graphviz
-is required only for optional render: :svg. One rendered snapshot preserves its
-native result/JSON; display and conversion need not rerun the query.
+Use the default Standalone runtime. Visual examples use render: :auto: Graphviz
+SVG when dot is detected, otherwise native JSON converted to Kino.Mermaid.
+Discovery checks EGGLOG_GRAPHVIZ_DOT, then GRAPHVIZ_DOT, then dot on PATH.
+Overrides must name executables; invalid values are ignored. Paths with spaces
+are supported without shell quoting inside the value. A detected renderer that
+fails/times out returns raw native DOT. Explicit render: :svg requires Graphviz. One rendered snapshot preserves its
+native result and DOT or JSON; displaying it does not rerun the query.
 
 ## Execution contracts
 
@@ -112,9 +116,9 @@ countermodel or a completeness result.
 | render_timeout | Bounds the Graphviz renderer | Cancelling the native run |
 | Mermaid browser limits | Bound what the frontend can parse/layout | Native proof failure or safe automatic truncation |
 
-Partial views must display snapshot.omitted. Analysis has capped Mermaid views
+Partial views must display snapshot.omitted. Analysis has capped automatic views
 and adjacent uncapped JSON summaries. Layout movement and snapshot differences
-are not proof traces. Class anchors, zero-based argument labels, aliases, sharing,
+are not proof traces. Native child references, zero-based argument labels, aliases, sharing,
 parent coalescing, cycles and subsumed nodes are explained in notebook legends.
 
 Extraction chooses representatives by native cost/ties. A normalization law

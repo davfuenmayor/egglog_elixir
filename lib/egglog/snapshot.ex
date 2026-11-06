@@ -35,12 +35,19 @@ defmodule Egglog.Snapshot do
   Converts native snapshot JSON to Mermaid flowchart source without rerunning
   egglog or invoking Graphviz. Accepts the same inputs as decode/1.
 
-  E-classes are subgraphs containing constructor nodes and a circular =
-  argument anchor. Zero-based edge labels preserve argument order. Edges
-  target the child's class anchor, not a particular representative. Native
-  let aliases and types appear in class titles; subsumed nodes are dashed.
+  Follows DOT's visible edge contract: cross-class arrows terminate on the
+  outer equality-class box, while internal edges retain their member-node
+  endpoint. Original child references remain in source comments. Every class
+  uses the same subgraph representation; white inner boxes are constructors.
+  Dashed class boxes retain native type colors and metadata titles.
 
-  Pass the result to Kino.Mermaid.new/1 (Kino is an optional caller dependency).
+  Multi-argument edges retain numeric argument indices; unary zero labels are
+  omitted. Kino's bundled Mermaid does not expose DOT source ports or reliable
+  endpoint-label placement, so label positions and routing remain automatic.
+  Class spacing is left to Mermaid and may be wider than Graphviz's layout.
+  Native IDs/metadata and subsumed flags remain in safe source comments; roots
+  have thicker borders. Empty metadata-only classes add no vertices.
+
   Layout differs from Graphviz. Native snapshot limits/leaf inlining apply
   before conversion; inspect omission metadata for capped snapshots.
 

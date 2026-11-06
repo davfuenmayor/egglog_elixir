@@ -2,6 +2,27 @@
 
 ## Unreleased (0.2.0)
 
+* Simplify Mermaid rendering to one class/subgraph and constructor/node model.
+  Remove custom singleton HTML, its separate escaping path and backslash-span
+  workaround. Retain DOT class-boundary targets, internal member targets, ordered
+  arguments, native labels/types, sharing and cycles. Leave sizing to Mermaid.
+
+* Correct visible Mermaid arrowheads to follow DOT lhead class boundaries, retaining
+  exact member targets for internal edges. Pack singleton classes tightly around
+  their constructors, reduce spacing/font overhead, and omit unary zero labels.
+  Check actual rendered arrow-tip coordinates against native DOT target boxes.
+
+* Align Mermaid with native DOT's labelled graph: remove synthetic equality
+  anchors, preserve exact e-node child references, match class metadata labels,
+  type colors, rounded nodes and dashed class styling. Preserve ordered edges,
+  repeats and cycles. Add native-exporter/browser parity checks and screenshots
+  for every visual Livebook view; document unavoidable layout differences.
+
+* Automatic snapshot rendering now selects Graphviz SVG when dot is detected
+  (EGGLOG_GRAPHVIZ_DOT, GRAPHVIZ_DOT, or PATH), otherwise JSON/Mermaid.
+  Preserve native DOT on a detected renderer's failure/timeout. All executable
+  library Livebooks use automatic visual views and retain omission notices.
+
 * Preserve native parser source spans as `{:error, {reason, message, location}}`
   across parsing, loading, running and inspection, including included files.
   Locations expose UTF-8 byte ranges and line/column coordinates without

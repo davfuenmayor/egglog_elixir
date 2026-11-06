@@ -1,8 +1,18 @@
 defmodule Egglog.Graphviz do
   @moduledoc false
 
+  # Values are executable paths (or command names), never shell commands.
+  def executable do
+    Enum.find_value(["EGGLOG_GRAPHVIZ_DOT", "GRAPHVIZ_DOT"], fn variable ->
+      case System.get_env(variable) do
+        value when is_binary(value) and value != "" -> System.find_executable(value)
+        _ -> nil
+      end
+    end) || System.find_executable("dot")
+  end
+
   def render(input, output, timeout) do
-    executable = System.find_executable("dot")
+    executable = executable()
 
     port =
       Port.open({:spawn_executable, executable}, [

@@ -8,6 +8,19 @@ defmodule Egglog.GraphvizTest do
   end
 
   setup %{tmp_dir: dir} do
+    overrides =
+      for key <- ["EGGLOG_GRAPHVIZ_DOT", "GRAPHVIZ_DOT"],
+          into: %{},
+          do: {key, System.get_env(key)}
+
+    Enum.each(Map.keys(overrides), &System.delete_env/1)
+
+    on_exit(fn ->
+      Enum.each(overrides, fn {key, value} ->
+        if value, do: System.put_env(key, value), else: System.delete_env(key)
+      end)
+    end)
+
     previous = System.fetch_env!("PATH")
     System.put_env("PATH", dir <> ":" <> previous)
     on_exit(fn -> System.put_env("PATH", previous) end)
@@ -69,6 +82,58 @@ defmodule Egglog.GraphvizTest do
     Program.with_program("", fn program ->
       assert {:ok, %{format: :dot}} = Program.snapshot(program, "", render_timeout: 150)
       assert_stopped(marker)
+    end)
+  end
+
+  test "auto selects Mermaid without dot, including string options and exports", %{dir: dir} do
+    System.put_env("PATH", dir)
+    System.put_env("EGGLOG_GRAPHVIZ_DOT", Path.join(dir, "absent"))
+    System.put_env("GRAPHVIZ_DOT", "")
+    assert Egglog.Graphviz.executable() == nil
+
+    EGraph.with_egraph("(relation seen (i64)) (seen 1)", fn graph ->
+      assert {:ok, %{format: :mermaid, json: json, mermaid: source, dot: nil}} =
+               EGraph.snapshot(graph, render: :auto, path: Path.join(dir, "view.mmd"))
+
+      assert Jason.decode!(json)["nodes"] != %{}
+      assert source =~ "flowchart"
+      assert File.read!(Path.join(dir, "view.mmd")) == source
+      assert {:error, {:graphviz_missing, _}} = EGraph.snapshot(graph, render: :svg)
+      assert {:ok, %{format: :dot}} = EGraph.snapshot(graph, render: :dot)
+    end)
+
+    Program.with_program("", fn program ->
+      for render <- [:auto, "auto", true] do
+        assert {:ok, %{format: :mermaid}} = Program.snapshot(program, "", render: render)
+      end
+    end)
+  end
+
+  test "auto prefers PATH Graphviz; environment overrides accept executable paths with spaces", %{
+    dir: dir
+  } do
+    fake_dot(dir, "printf '<svg>PATH</svg>' > \"$4\"\n")
+
+    EGraph.with_egraph(fn graph ->
+      assert {:ok, %{format: :svg, svg: "<svg>PATH</svg>", dot: dot}} = EGraph.snapshot(graph)
+      assert dot =~ "digraph"
+      override_dir = Path.join(dir, "graphviz with spaces")
+      File.mkdir_p!(override_dir)
+      fake_dot(override_dir, "printf '<svg>ENV</svg>' > \"$4\"\n")
+      override = Path.join(override_dir, "dot")
+      System.put_env("GRAPHVIZ_DOT", override)
+      assert Egglog.Graphviz.executable() == override
+      assert {:ok, %{svg: "<svg>ENV</svg>"}} = EGraph.snapshot(graph, render: :auto)
+      System.put_env("EGGLOG_GRAPHVIZ_DOT", Path.join(dir, "dot"))
+      assert {:ok, %{svg: "<svg>PATH</svg>"}} = EGraph.snapshot(graph, render: :svg)
+      System.put_env("EGGLOG_GRAPHVIZ_DOT", "not a command --flags")
+      assert {:ok, %{svg: "<svg>ENV</svg>"}} = EGraph.snapshot(graph, render: :auto)
+      System.put_env("PATH", "")
+
+      Program.with_program("", fn program ->
+        assert {:ok, %{format: :svg, svg: "<svg>ENV</svg>"}} =
+                 Program.snapshot(program, "", render: :auto)
+      end)
     end)
   end
 

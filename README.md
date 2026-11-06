@@ -67,8 +67,9 @@ For debugging and teaching examples, use `Egglog.snapshot/3` or
 Snapshots ask native egglog to serialize the e-graph. The wrapper can return
 DOT, SVG, JSON, or Mermaid:
 
-* `render: :auto` returns SVG when Graphviz completes successfully and falls
-  back to native DOT if Graphviz is missing, fails or times out.
+* `render: :auto` (the default) returns Graphviz SVG when a dot executable is
+  detected; otherwise it converts native JSON to Mermaid. If a detected renderer
+  fails or times out, it retains native DOT.
 * `render: :dot` returns DOT.
 * `render: :svg` requires SVG rendering.
 * `render: :json` returns egglog's JSON serialization.
@@ -83,6 +84,32 @@ Expiration kills Graphviz. Explicit SVG requests return
 `{:error, {:graphviz_timeout, milliseconds}}`; automatic rendering returns DOT.
 This does not cancel or roll back native egglog execution. Use native snapshot
 limits to reduce diagrams, or `render: :dot` / `render: :json` to skip SVG layout.
+
+Graphviz discovery tries `EGGLOG_GRAPHVIZ_DOT`, then `GRAPHVIZ_DOT`, then `dot`
+on PATH. Override values must be executable paths or command names, without
+arguments or shell quoting; paths containing spaces are supported. Invalid or
+non-executable values are ignored. Overrides also apply to explicit `:svg`.
+
+```sh
+export EGGLOG_GRAPHVIZ_DOT="/opt/Graphviz Suite/bin/dot"
+```
+
+Automatic snapshots have `format: :svg` with `svg`/`dot`, or `format: :mermaid`
+with `mermaid`/`json`. They retain the selected native snapshot in `result`;
+choosing a format does not rerun the query. Inspect `snapshot.format` in displays
+and only request downloads for fields present in that result. Explicit `:dot`,
+`:svg`, `:json`, and `:mermaid` retain their existing meanings.
+
+## Automatic snapshots in Kino
+
+```elixir
+snapshot = Egglog.Program.snapshot!(program, input, render: :auto)
+case snapshot do
+  %{format: :svg, svg: svg} -> Kino.HTML.new(svg)
+  %{format: :mermaid, mermaid: source} -> Kino.Mermaid.new(source)
+  %{text: text} -> Kino.Text.new(text)
+end
+```
 
 ## Mermaid snapshots in Kino
 
@@ -104,11 +131,26 @@ They retain native json, original result, statistics, and omission metadata.
 mermaid_path (or path) exports .mmd; json_path exports the same native input.
 No DOT/SVG is generated in this mode. Core has no Kino dependency.
 
-Each e-class is a subgraph containing constructor nodes and a circular =
-anchor. Argument edges target class anchors rather than selected representatives;
-zero-based labels preserve argument positions. Types/let aliases label classes.
-Sharing, repeated arguments, cycles and subsumed nodes are retained. Labels are
-escaped and IDs are deterministic for a given snapshot. Layout differs from DOT.
+Mermaid matches the native DOT labelled graph: one vertex per serialized e-node,
+the same equality-class grouping, and DOT-style class-boundary arrowheads. The
+original child references are retained in source comments. It adds no
+synthetic anchor vertices. White rounded nodes, dashed colored classes, fonts,
+and native metadata titles follow Graphviz. IDs/types stay out of visible labels;
+types determine the same Graphviz palette. Zero-based labels on multi-argument
+edges replace DOT's argument ports; unary zeros are omitted. Shared children,
+repeated arguments and self-loops survive. Every equality class is rendered as
+one standard Mermaid subgraph; every constructor is one ordinary labelled node.
+The renderer uses a single escaping path, without custom HTML or special singleton
+boxes. It deliberately leaves box sizing and layout to Mermaid.
+
+An edge's referenced node belongs to the argument's entire equality class; it is
+not a preferred expression. Positions, class-member ordering and edge routing
+can differ: Mermaid lacks DOT's same-rank and source-port constraints. Cross-class targets
+are class boxes, matching DOT lhead; edges within a class retain member targets.
+Subsumed flags and native identifiers remain in safe base64-JSON source comments;
+roots use thicker borders. Labels are escaped and IDs are deterministic for a
+given snapshot. Literal backslashes use Graphviz's display convention; the
+original strings remain unchanged in the native JSON.
 
 Large sources may exceed the frontend's text/edge limits or be unreadable.
 The exporter does not silently truncate. Use snapshot_max_functions /
@@ -171,8 +213,8 @@ are included. macOS Intel/Apple Silicon build recipes are prepared but require
 Mac runners before binaries can be shipped and validated. musl/Alpine is excluded.
 See [MULTIPLATFORM.md](MULTIPLATFORM.md) for exact build/test status and baselines.
 
-Graphviz is optional: default snapshots show SVG if `dot` is available, otherwise
-DOT text. JSON and Mermaid work without Graphviz; Livebook views use Mermaid. All notebook examples
+Graphviz is optional: default snapshots show SVG when dot is detected, otherwise
+Mermaid. Livebook visual examples use this automatic mode. All notebook examples
 run through native egglog, and the default Standalone Livebook runtime works.
 
 ```sh
@@ -300,3 +342,38 @@ The browser check requires rendered SVG and verifies node/edge counts,
 so a parser error or an oversized-source error diagram cannot pass.
 It also verifies escaped label text. Playwright is a test tool, not a
 library dependency. Real Livebook session checks remain separate.
+
+## Graphviz/Mermaid comparison checks
+
+The dev-only comparison tool runs the pinned egraph-serialize 0.3.0 DOT exporter
+on the **same JSON** supplied to Mermaid, without reexecuting egglog. The browser
+checker uses Kino's bundled Mermaid, verifies rendered labels, directed edges,
+argument positions, parallel edges, self-loops, class grouping and type colors,
+and can save side-by-side screenshots. It now checks actual arrow-tip positions
+against the target class boundary (or member boundary for internal edges), rather
+than inferring visual correctness from child IDs. Layout positions are not compared.
+Argument-label placement remains Mermaid's default: attempts to set compass ports
+produce extra vertices in Kino, and unsupported label-position settings are ignored.
+
+Capture every visual view from all executable library Livebooks and the sibling
+course, including consecutive reruns, exercise edits and round selections:
+
+```sh
+EGGLOG_GRAPH_PARITY_DIR="$PWD/tmp/livebook-parity" \
+  elixir scripts/check_livebook_cells.exs --no-dot
+EGGLOG_GRAPH_PARITY_DIR="$PWD/tmp/livebook-parity" \
+  elixir ../formal-languages/tutorial/check_cells.exs --no-dot
+EGGLOG_MERMAID_EXPORT_DIR="$PWD/tmp/livebook-parity" \
+  mix test test/egglog/mermaid_test.exs
+CARGO_TARGET_DIR=/tmp/egglog-dot-oracle \
+  cargo run --locked --manifest-path scripts/native_graphviz/Cargo.toml -- tmp/livebook-parity
+EGGLOG_REQUIRE_DOT_PARITY=1 EGGLOG_MERMAID_SCREENSHOTS="$PWD/tmp/livebook-parity/screenshots" \
+  node scripts/check_mermaid_browser.cjs tmp/livebook-parity/kino-assets tmp/livebook-parity
+```
+
+Rust, Graphviz and Playwright/Chromium are dev-only requirements for this check.
+Set NODE_PATH if Playwright is installed outside the checkout. sources.ndjson
+records which notebooks produced each captured graph. The reference-only Rust
+chapter has no executable views. The exporter restores non-finite JSON costs
+(null) to a finite placeholder solely for deserialization; DOT ignores costs.
+For a small independent corpus, run `elixir scripts/export_graph_parity.exs`.

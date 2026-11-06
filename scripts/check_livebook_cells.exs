@@ -2,6 +2,10 @@
 root = Path.expand("..", __DIR__)
 unless System.argv() in [[], ["--no-dot"]], do: raise("usage: [--no-dot]")
 Mix.install([{:egglog_elixir, path: root}, {:kino, "~> 0.19.0"}])
+
+if System.get_env("EGGLOG_GRAPH_PARITY_DIR"),
+  do: Code.require_file(Path.join(__DIR__, "graph_parity_capture.exs"))
+
 # Extract the actual installed Kino assets, not a different Mermaid npm version.
 if directory = System.get_env("EGGLOG_MERMAID_EXPORT_DIR") do
   assets = Path.join(directory, "kino-assets")
@@ -15,7 +19,11 @@ if directory = System.get_env("EGGLOG_MERMAID_EXPORT_DIR") do
     )
 end
 
-if System.argv() == ["--no-dot"], do: System.put_env("PATH", "")
+if System.argv() == ["--no-dot"] do
+  System.put_env("PATH", "")
+  System.delete_env("EGGLOG_GRAPHVIZ_DOT")
+  System.delete_env("GRAPHVIZ_DOT")
+end
 
 # Optional corpus capture: record exactly the source passed to Kino, so its
 # browser-side renderer can be tested rather than assuming a Kino object rendered.
@@ -31,6 +39,7 @@ defmodule EgglogMermaidCapture do
 end
 
 for path <- Path.wildcard(Path.join(root, "livebooks/**/*.livemd")) do
+  Process.put(:egglog_parity_notebook, Path.relative_to(path, root))
   # Livebook explicitly marks illustrative Elixir fences as Markdown.
   text =
     Regex.replace(
@@ -48,6 +57,11 @@ for path <- Path.wildcard(Path.join(root, "livebooks/**/*.livemd")) do
   executable =
     Enum.reject(cells, &String.starts_with?(String.trim(&1), "Mix.install("))
     |> Enum.map(&String.replace(&1, "Kino.Mermaid.new(", "EgglogMermaidCapture.new("))
+
+  executable =
+    if System.get_env("EGGLOG_GRAPH_PARITY_DIR"),
+      do: Enum.map(executable, &EgglogGraphParityCapture.instrument/1),
+      else: executable
 
   evaluate = fn source, {binding, env} ->
     {_, binding, env} = Code.eval_quoted_with_env(Code.string_to_quoted!(source), binding, env)
