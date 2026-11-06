@@ -47,3 +47,6 @@ Desktop.ini
 # Release staging and local tooling state
 /dist/
 /.expert/
+
+# Dev-only native DOT comparison oracle
+/scripts/native_graphviz/target/

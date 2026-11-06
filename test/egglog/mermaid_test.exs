@@ -5,7 +5,7 @@ defmodule Egglog.MermaidTest do
   defp node(op, eclass, children \\ []),
     do: %{"op" => op, "eclass" => eclass, "children" => children}
 
-  test "ordered edges target equivalence classes, including repeated and cyclic arguments" do
+  test "ordered edges preserve native child references, including repeated and cyclic arguments" do
     graph = %{
       "nodes" => %{
         "a" => node("A", "value"),
@@ -16,12 +16,12 @@ defmodule Egglog.MermaidTest do
     }
 
     text = Snapshot.to_mermaid!(graph)
-    assert text =~ ~s(subgraph c0["value #124; Term #124; let left, right"])
+    assert text =~ ~s(subgraph c0["let left, right"])
     assert text =~ ~s(n0["A"])
     assert text =~ ~s(n1["B"])
-    assert text =~ "n2 -->|0| c0_anchor"
-    assert text =~ "n2 -->|1| c0_anchor"
-    refute text =~ "-->|0| n1"
+    assert text =~ "n2 -->|0| n1"
+    assert text =~ "n2 -->|1| n0"
+    refute text =~ "_anchor"
     assert length(Regex.scan(~r/^  subgraph /m, text)) == 1
     assert Snapshot.to_mermaid!(Jason.encode!(graph)) == text
     assert Snapshot.to_mermaid!(%{snapshot: %{format: :json, text: Jason.encode!(graph)}}) == text
@@ -37,9 +37,9 @@ defmodule Egglog.MermaidTest do
         }
       })
 
-    assert source =~ "n2 -->|0| c1_anchor"
-    assert source =~ "n2 -->|1| c0_anchor"
-    refute source =~ "n2 -->|0| c0_anchor"
+    assert source =~ "n2 -->|0| c1"
+    assert source =~ "n2 -->|1| c0"
+    refute source =~ "n2 -->|0| c0"
   end
 
   test "independent classes are never merged by equal labels and native IDs stay out of syntax" do
@@ -62,14 +62,16 @@ defmodule Egglog.MermaidTest do
         "class_data" => %{"x" => %{"let" => dangerous}}
       })
 
-    assert text =~ "#34;#93;#10;#37;#37;"
+    assert text =~ "#34;#93;<br/>#37;#37;"
     assert text =~ "#60;script#62;#38;#96;#92;λ"
     refute text =~ "<script>"
-    refute text =~ "%%{init"
+    refute text =~ "%%{init: {}}%%"
   end
 
-  test "empty graphs, empty classes, roots and subsumed nodes are explicit" do
-    assert Snapshot.to_mermaid!(%{"nodes" => %{}}) =~ ~s(empty["Empty e-graph"])
+  test "empty metadata classes add no vertices; root and subsumption metadata survive" do
+    empty = Snapshot.to_mermaid!(%{"nodes" => %{}})
+    refute empty =~ "\n  subgraph "
+    refute empty =~ "empty["
 
     text =
       Snapshot.to_mermaid!(%{
@@ -78,9 +80,52 @@ defmodule Egglog.MermaidTest do
         "root_eclasses" => ["x"]
       })
 
-    assert text =~ ":::subsumed"
-    assert text =~ "style c1 stroke-width:3px"
-    assert text =~ ~s(subgraph c0["empty"])
+    assert text =~ "%% subsumed n0"
+    assert text =~ "stroke-width:2px"
+    refute text =~ ~s("empty")
+    assert text =~ ~s(subgraph c0[" "])
+  end
+
+  test "Graphviz labels and type colors omit IDs/types and preserve extra metadata" do
+    text =
+      Snapshot.to_mermaid!(%{
+        "nodes" => %{"a" => node("A", "x"), "b" => node("B", "y"), "c" => node("C", "z")},
+        "class_data" => %{
+          "x" => %{"type" => "DNA", "let" => "a", "note" => "line 1\nline 2"},
+          "y" => %{"type" => "DNAFormula", "let" => "claim"},
+          "z" => %{"type" => "DNA"}
+        }
+      })
+
+    assert text =~ "let a<br/>note line 1<br/>line 2"
+    assert text =~ "style c0 fill:#ffffb3"
+    assert text =~ "style c1 fill:#ffffb3"
+    assert text =~ "style c2 fill:#bebada"
+    refute text =~ "#124;"
+    refute text =~ ":::subsumed"
+  end
+
+  test "cross-class arrows terminate at the class boundary rather than a member" do
+    source =
+      Snapshot.to_mermaid!(%{
+        "nodes" => %{
+          "a" => node("A", "value"),
+          "b" => node("B", "value"),
+          "f" => node("F", "outer", ["b"])
+        }
+      })
+
+    assert source =~ "%% edge n2 0 n1"
+    assert source =~ "n2 --> c1"
+    refute source =~ "n2 --> n1"
+    refute source =~ "n2 -->|0|"
+  end
+
+  test "a singleton self-loop keeps its constructor endpoint instead of targeting its parent class" do
+    source = Snapshot.to_mermaid!(%{"nodes" => %{"f" => node("F", "value", ["f"])}})
+    assert source =~ "subgraph c0"
+    assert source =~ "n0 --> n0"
+    refute source =~ "singleton"
   end
 
   test "malformed JSON, schema and dangling children return errors instead of invented equalities" do
@@ -133,6 +178,7 @@ defmodule Egglog.MermaidTest do
       if directory = System.get_env("EGGLOG_MERMAID_EXPORT_DIR") do
         File.mkdir_p!(directory)
         File.write!(Path.join(directory, "fixture-#{name}.mmd"), source)
+        File.write!(Path.join(directory, "fixture-#{name}.json"), Jason.encode!(graph))
       end
 
       assert source =~ "flowchart TB"

@@ -40,12 +40,12 @@ Graphviz can exceed the rendering deadline while laying out the Analysis
 notebook's large graphs. Automatic rendering kills the renderer after 30 seconds
 by default and returns native DOT, allowing the lesson to continue. Explicit
 `render: :svg` requests return `{:error, {:graphviz_timeout, 30_000}}`;
-callers can set `:render_timeout`. Current notebook views use Mermaid instead; Graphviz fallback remains
-available when requesting automatic SVG rendering.
+callers can set `:render_timeout`. Notebook views now use automatic rendering: Graphviz where detected and Mermaid
+otherwise. The raw DOT fallback still applies to renderer failure or timeout.
 
 DOT/JSON/Mermaid output avoids Graphviz layout. Native snapshot limits
 (`snapshot_max_functions`, `snapshot_max_calls_per_function`) can reduce the
-diagram. Current Analysis Mermaid views use explicit limits and show omission
+diagram. Current Analysis automatic views use explicit limits and show omission
 metadata; their JSON summaries inspect the full graph. The original
 object-language programs and reasoning examples are unchanged.
 

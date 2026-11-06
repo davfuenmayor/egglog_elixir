@@ -1,12 +1,17 @@
 # Equality Saturation
 
-Visual snapshots in this notebook use **render: :mermaid**:
-native JSON is converted to flowchart source and displayed by Kino.Mermaid.
-Each subgraph is an e-class; circular = anchors are argument targets, not
-constructors. Zero-based edge labels preserve argument order. Graphviz is
-not needed for these views; render: :svg / :dot remain available.
-The snapshot retains native JSON and omission metadata. Layout differs
-from Graphviz; identical child classes may collapse duplicate parent nodes.
+Visual snapshots in this notebook use **render: :auto**. The wrapper renders
+native DOT as Graphviz SVG when dot is available, or native JSON as Mermaid
+otherwise. Set EGGLOG_GRAPHVIZ_DOT (or GRAPHVIZ_DOT) to an executable path,
+including paths with spaces; otherwise dot is discovered on PATH. Invalid
+overrides are ignored. A detected renderer failure/timeout leaves raw DOT.
+The helper below displays the returned format without executing egglog again.
+Both renderers preserve native e-nodes and equality classes, with matching
+metadata labels and type colors. Cross-class arrows terminate at outer boxes;
+internal arrows keep their member endpoint. All classes use standard subgraphs. Mermaid uses numbered
+edges for multi-argument constructors instead of DOT ports; unary zeros are omitted. An argument still
+denotes its child's whole e-class. Layout/routing and class-member ordering can
+differ. Snapshot omission notices apply to either renderer.
 
 ## Intro
 
@@ -44,7 +49,7 @@ reconstruction, not a hidden reset of a mutable graph. It costs more than increm
 execution but keeps phase experiments independent.
 
 Mermaid views need no Graphviz. For an optional SVG comparison, use
-render: :svg with Graphviz installed; render: :auto falls back to DOT
+render: :svg with Graphviz installed; render: :auto uses Mermaid when Graphviz is absent, and retains DOT
 if Graphviz cannot render the graph.
 
 The helper deliberately keeps egglog syntax visible. The Elixir code is only notebook plumbing; congruence closure, matching, rebuilding, scheduling, and extraction all happen in native egglog.
@@ -60,14 +65,15 @@ Mix.install([
 ```
 
 ```elixir
-render_snapshot = fn
-  %{format: :mermaid, mermaid: source} = snapshot ->
-    graph = Kino.Mermaid.new(source)
-    if snapshot.omitted in [nil, ""],
-      do: graph,
-      else: Kino.Layout.grid([Kino.Text.new("Partial snapshot: " <> snapshot.omitted), graph])
-  %{format: :svg, svg: svg} -> Kino.HTML.new(svg)
-  %{text: text} -> text
+render_snapshot = fn snapshot ->
+  graph = case snapshot do
+    %{format: :mermaid, mermaid: source} -> Kino.Mermaid.new(source)
+    %{format: :svg, svg: svg} -> Kino.HTML.new(svg)
+    %{text: text} -> Kino.Text.new(text)
+  end
+  if snapshot.omitted in [nil, ""],
+    do: graph,
+    else: Kino.Layout.grid([Kino.Text.new("Partial snapshot: " <> snapshot.omitted), graph])
 end
 
 # Source baseline, not a native handle.
@@ -163,11 +169,11 @@ Now the e-graph under discussion contains two named terms:
 
 They are not equal yet. We have only inserted them.
 
-The upstream web tutorial shows the e-graph in the browser. In Livebook we ask the wrapper for a comparable snapshot. The snapshot is produced by native egglog's JSON serializer; the wrapper translates it and Kino renders Mermaid.
+The upstream web tutorial shows the e-graph in the browser. In Livebook we ask the wrapper for a comparable snapshot. Native egglog serializes the snapshot; automatic rendering selects Graphviz SVG or JSON/Mermaid according to executable discovery.
 
 ```elixir
 Egglog.Program.with_program(phase_02, fn program ->
-  Egglog.Program.snapshot!(program, "", render: :mermaid)
+  Egglog.Program.snapshot!(program, "", render: :auto)
 end)
 |> render_snapshot.()
 ```
@@ -502,7 +508,7 @@ This snapshot shows equality saturation as growth of an equivalence structure, n
 
 ```elixir
 Egglog.Program.with_program(phase_14, fn program ->
-  Egglog.Program.snapshot!(program, "", render: :mermaid)
+  Egglog.Program.snapshot!(program, "", render: :auto)
 end)
 |> render_snapshot.()
 ```
@@ -556,7 +562,7 @@ Now that `expr1` and `expr2` have been checked equal, the snapshot should show t
 
 ```elixir
 Egglog.Program.with_program(phase_15, fn program ->
-  Egglog.Program.snapshot!(program, "", render: :mermaid)
+  Egglog.Program.snapshot!(program, "", render: :auto)
 end)
 |> render_snapshot.()
 ```
@@ -617,7 +623,7 @@ The first check is wrapped in `fail` because before running the new rule, `expr3
 
 ```elixir
 Egglog.Program.with_program(phase_16, fn program ->
-  Egglog.Program.snapshot!(program, "", render: :mermaid)
+  Egglog.Program.snapshot!(program, "", render: :auto)
 end)
 |> render_snapshot.()
 ```
@@ -664,7 +670,7 @@ fold_snapshot = Egglog.Program.with_program(fold_theory, fn program ->
   Egglog.Program.snapshot!(program, fold_terms <> """
 (fail (check (= goal expected)))
 (extract goal)
-""", render: :mermaid)
+""", render: :auto)
 end)
 render_snapshot.(fold_snapshot)
 ```
@@ -677,7 +683,7 @@ fold_snapshot = Egglog.Program.with_program(fold_theory, fn program ->
 (run 1)
 (fail (check (= goal expected)))
 (extract goal)
-""", render: :mermaid)
+""", render: :auto)
 end)
 render_snapshot.(fold_snapshot)
 ```
@@ -690,7 +696,7 @@ fold_snapshot = Egglog.Program.with_program(fold_theory, fn program ->
 (run 2)
 (check (= goal expected))
 (extract goal)
-""", render: :mermaid)
+""", render: :auto)
 end)
 render_snapshot.(fold_snapshot)
 ```

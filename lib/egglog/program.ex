@@ -228,8 +228,11 @@ defmodule Egglog.Program do
 
       Accepted values:
 
-      * `:auto`, `"auto"`, or `true` - render SVG with Graphviz when the
-        `dot` executable succeeds; otherwise return native DOT text.
+      * `:auto`, `"auto"`, or `true` - render native DOT as SVG when Graphviz
+        is available; otherwise convert native JSON to Mermaid. Discovery tries
+        `EGGLOG_GRAPHVIZ_DOT`, then `GRAPHVIZ_DOT`, then `dot` on PATH. Environment
+        values must name an executable, not a shell command; invalid values are
+        ignored. If a detected renderer fails or times out, retain native DOT.
       * `:svg` or `"svg"` - require Graphviz SVG rendering. Returns
         `{:error, {:graphviz_missing, message}}` if `dot` is unavailable.
       * `:dot`, `"dot"`, `false`, or `nil` - return Graphviz DOT text.
