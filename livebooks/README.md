@@ -1,5 +1,7 @@
 # Livebooks
 
+> **⚠️ Warning:** Install Graphviz (`dot` on PATH) for better-looking graphs. Otherwise Mermaid is used, with less polished layouts.
+
 Start at the [index](index.livemd), then [Getting Started](getting_started.livemd)
 for application usage or the [tutorial chapters](egglog-tutorial/README.md).
 

@@ -1,5 +1,7 @@
 # Index
 
+> **⚠️ Warning:** Install Graphviz (`dot` on PATH) for better-looking graphs. Otherwise Mermaid is used, with less polished layouts.
+
 ## Start here
 
 [Getting Started](getting_started.livemd) introduces the library's two execution
