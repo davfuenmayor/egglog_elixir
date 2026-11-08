@@ -2,57 +2,34 @@
 
 Scope: pinned egglog 3.0.0 revision
 `b912caa9694c0c029f9ae3d91db0adc8824e14f5`.
+Reviewed 2026-11-08 against the current working tree.
+Only outstanding issues and limitations are listed here.
 [API_COVERAGE.md](API_COVERAGE.md) records supported functionality and omissions.
+Open API proposals are in `egglog_elixir_improvements.md`.
 
-## Concurrent execution of clones from one base
+## Precompiled distribution gaps
 
-**Apparent upstream issue.** A Rust-only probe creates eight clones of a base
-containing a `Math` datatype and a rewrite. Each clone concurrently executes
-`(let x (Add (Num n) (Num 0)))`, `(run 2)`, and `(extract x)`.
-In 80 runs, 68 failed at the current pin and 73 at the previous
-`f0da95b0611a7c0be28d89b17e05a11b4490c6b0` pin. Failures included missing
-`x` lookups and an `Option::unwrap()` panic in native expression evaluation.
-Sequential clones and independently constructed graphs each passed all 80 runs
-at both revisions. This checks one workload, not general clone independence.
+macOS bundles still require matching Mac builders and runners. Windows validation
+uses Wine; ARM64 validation uses QEMU. Native hardware and minimum OS/OTP
+validation remain release checks. See [MULTIPLATFORM.md](MULTIPLATFORM.md) for
+build commands and exact coverage.
 
-The wrapper holds a per-program mutex throughout clone execution. Independently
-loaded programs can run concurrently; there is no global lock. Caught panics
-discard the affected program or mutable graph. The exact upstream cause and
-an upstream issue/developer acknowledgment have not been established.
+## Automatic fallback loses renderer diagnostics
 
-The wrapper regression is `query-local program runs are safe to use concurrently`
-in [program_integration_test.exs](test/egglog/program_integration_test.exs).
-Remove the execution lock only after upstream clone independence is established
-and repeated concurrent tests pass at the replacement pin.
+`lib/egglog/common.ex` returns a successful DOT snapshot after an automatic SVG
+failure/timeout, but drops the renderer error. The snapshot's format identifies
+the fallback, not its cause. A rendering report remains an open proposal in
+`egglog_elixir_improvements.md`.
 
-## Precompiled distribution
+## Mermaid layout fidelity
 
-Normal installs use included, checksum-verified Linux x86-64/ARM64 and Windows
-x86-64 bundles. macOS bundles still require matching Mac builders and runners.
-Windows validation uses Wine; ARM64 validation uses QEMU. Native hardware and
-minimum OS/OTP validation remain release checks. See
-[MULTIPLATFORM.md](MULTIPLATFORM.md) for build commands and exact coverage.
-No package or release assets have been published.
+Mermaid cannot reproduce DOT source ports, edge-label positions, box proportions
+or routing exactly. Graphviz remains the layout reference. These presentation
+limitations prevent identical appearance even for the same labelled graph.
 
-## Analysis Livebook SVG layout
+## Native execution cancellation and resource budgets
 
-Graphviz can exceed the rendering deadline while laying out the Analysis
-notebook's large graphs. Automatic rendering kills the renderer after 30 seconds
-by default and returns native DOT, allowing the lesson to continue. Explicit
-`render: :svg` requests return `{:error, {:graphviz_timeout, 30_000}}`;
-callers can set `:render_timeout`. Notebook views now use automatic rendering: Graphviz where detected and Mermaid
-otherwise. The raw DOT fallback still applies to renderer failure or timeout.
-
-DOT/JSON/Mermaid output avoids Graphviz layout. Native snapshot limits
-(`snapshot_max_functions`, `snapshot_max_calls_per_function`) can reduce the
-diagram. Current Analysis automatic views use explicit limits and show omission
-metadata; their JSON summaries inspect the full graph. The original
-object-language programs and reasoning examples are unchanged.
-
-## Mermaid frontend limits
-
-The wrapper emits complete Mermaid source from the requested native JSON.
-Browser Mermaid has text/edge/layout limits independent of native egglog.
-Very large snapshots may exceed those limits. Use explicit serialization
-limits and display omission metadata, as in the Analysis notebook.
-The exporter never silently caps a graph or presents a partial view as complete.
+Caller timeouts do not cancel native computation. Output limits truncate returned
+output, and snapshot caps limit serialization; neither bounds reasoning work.
+A run count is not a general native time or memory budget. The wrapper provides
+no native cancellation or general execution deadline.

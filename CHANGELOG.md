@@ -2,6 +2,31 @@
 
 ## Unreleased (0.2.0)
 
+* Separate the navigation-only `index.livemd` from Getting Started, an application
+  guide to EGraph/Program, typed queries, failure recovery, ownership and rendering.
+  Point the README launch badge and all back-to-index links at the index.
+
+* Keep dependencies, display helpers and rendering options together in each
+  Livebook setup cell, with a short setup note before the lesson.
+
+* Make Getting Started a collection index and concise two-model library tour.
+  Showcase the same arithmetic example with EGraph checkpoints/rollback and
+  independent Program runs, with automatic graphs throughout. Keep Step as a
+  briefly mentioned notebook utility.
+  Add a Run in Livebook badge; preserve the original notebook path for navigation.
+
+* Add `Egglog.Program.Step.new/1` and `next/3` for replayable source/snapshot
+  values with scoped native resources. Convert tutorial examples to
+  `step = next.(previous, code)` and automatically display native output and
+  graphs through a notebook-local Kino protocol, without a library Kino dependency.
+
+* Restore upstream tutorial prose throughout all seven Livebooks, with MIT
+  attribution. Centralize wrapper/runtime guidance in the Livebook README.
+  Show 106 automatic Graphviz/Mermaid snapshots, replacing summary-only cells
+  and exposing intermediate states, checks, extraction and rollback. Add native
+  graph illustrations for the matrix and compiler case studies while retaining
+  the upstream experimental/Rust reference material.
+
 * Simplify Mermaid rendering to one class/subgraph and constructor/node model.
   Remove custom singleton HTML, its separate escaping path and backslash-span
   workaround. Retain DOT class-boundary targets, internal member targets, ordered
@@ -29,10 +54,10 @@
   parsing diagnostic text. Non-parser error shapes remain unchanged.
 
 * Make notebook experiments revisitable with explicit source baselines and scoped
-  Program queries; keep intentional EGraph mutation/rollback in Getting Started.
+  Program queries, including snapshots before and after native push/pop.
 * Centralize onboarding/lifecycle/limit guidance, correct navigation and remove
-  hypothetical package advice; mark the Rust compiler guide reference-only.
-* Test consecutive cell reruns, early-phase revisits, closed handles and theory
+  hypothetical package advice; explain experimental/Rust extension boundaries.
+* Test consecutive cell reruns, early-step revisits, closed handles and theory
   edits/reloads; add before/one/two rounds and negative-remainder examples.
 
 * JSON-to-Mermaid snapshots with render: :mermaid, mermaid_path exports, and

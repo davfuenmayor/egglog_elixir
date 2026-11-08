@@ -1,85 +1,90 @@
 # Extraction and Cost
 
-Visual snapshots in this notebook use **render: :auto**. The wrapper renders
-native DOT as Graphviz SVG when dot is available, or native JSON as Mermaid
-otherwise. Set EGGLOG_GRAPHVIZ_DOT (or GRAPHVIZ_DOT) to an executable path,
-including paths with spaces; otherwise dot is discovered on PATH. Invalid
-overrides are ignored. A detected renderer failure/timeout leaves raw DOT.
-The helper below displays the returned format without executing egglog again.
-Both renderers preserve native e-nodes and equality classes, with matching
-metadata labels and type colors. Cross-class arrows terminate at outer boxes;
-internal arrows keep their member endpoint. All classes use standard subgraphs. Mermaid uses numbered
-edges for multi-argument constructors instead of DOT ports; unary zeros are omitted. An argument still
-denotes its child's whole e-class. Layout/routing and class-member ordering can
-differ. Snapshot omission notices apply to either renderer.
-
-## Intro
-
-These notebooks are Livebook adaptations of the upstream egglog tutorial from https://egraphs-good.github.io/egglog-tutorial/. The egglog examples follow the upstream chapter order closely; the extra Elixir cells are there to make normally silent egglog state visible in Livebook.
-
-Executable blocks below are independently revisitable Program phases.
-Evaluate setup and preceding source definitions first. Each phase explicitly loads
-its previous source baseline, runs its own step on a clone, and closes the handle.
-The phase_XX values are strings, not graphs. Revisit an earlier phase without
-accumulating declarations or changing a persistent rollback stack.
-
-
-Use the local checkout below. See [installation and execution contracts](../README.md)
-for maintained platform, publication, lifecycle and limit guidance.
-
 ```elixir
-Mix.install([
-  {:egglog_elixir, path: Path.expand("../..", __DIR__)},
-  {:kino, "~> 0.19.0"}
-])
-```
+Mix.install(
+  [
+    {:egglog_elixir, path: Path.expand("../..", __DIR__)},
+    {:kino, "~> 0.19.0"}
+  ],
+  consolidate_protocols: false
+)
 
-```elixir
-render_snapshot = fn snapshot ->
-  graph = case snapshot do
-    %{format: :mermaid, mermaid: source} -> Kino.Mermaid.new(source)
-    %{format: :svg, svg: svg} -> Kino.HTML.new(svg)
-    %{text: text} -> Kino.Text.new(text)
+# Implements Kino.Render to display each step's native output and graph.
+defimpl Kino.Render, for: Egglog.Program.Step do
+  def to_livebook(%{snapshot: nil}) do
+    Kino.Render.to_livebook(Kino.Text.new("Initial step"))
   end
-  if snapshot.omitted in [nil, ""],
-    do: graph,
-    else: Kino.Layout.grid([Kino.Text.new("Partial snapshot: " <> snapshot.omitted), graph])
+
+  def to_livebook(%{snapshot: snapshot}) do
+    output = Enum.map(Egglog.Output.texts(snapshot.result), &Kino.Text.new/1)
+
+    graph =
+      case snapshot do
+        %{format: :mermaid, mermaid: source} -> Kino.Mermaid.new(source)
+        %{format: :svg, svg: svg} -> Kino.HTML.new(svg)
+        %{text: text} -> Kino.Text.new(text)
+      end
+
+    notes =
+      if snapshot.omitted in [nil, ""],
+        do: [],
+        else: [Kino.Markdown.new("Partial view: " <> snapshot.omitted)]
+
+    empty =
+      if snapshot.stats.snapshot_nodes == 0,
+        do: [Kino.Markdown.new("The e-graph is empty.")],
+        else: []
+
+    Kino.Render.to_livebook(Kino.Layout.grid(output ++ notes ++ empty ++ [graph]))
+  end
 end
 
-# Source baseline, not a native handle.
-phase_00 = ""
-```
+graph_limits = [
+  snapshot_max_functions: 12,
+  snapshot_max_calls_per_function: 6,
+  snapshot_inline_leaves: 1
+]
 
-> Scope note: the first half of this chapter runs through the wrapper and
-> covers ordinary extraction plus constructor `:cost` annotations. The later
-> dynamic-cost section uses experimental/native extension features:
-> `with-dynamic-cost`, `set-cost`, and `DynamicCostModel`. Those blocks are
-> preserved as reference text rather than executed by the thin wrapper.
+step_00 = Egglog.Program.Step.new()
+
+next = fn previous, code ->
+  Egglog.Program.Step.next(previous, code, [render: :auto] ++ graph_limits)
+end
+
+Kino.nothing()
+```
 
 ## Extraction and Cost
 
-After saturation, an e-class may represent many equivalent terms. Extraction is the step that chooses one representative term for downstream use.
+[Upstream lesson](https://egraphs-good.github.io/egglog-tutorial/05-cost-model-and-extraction.html) · [back to index](../index.livemd)
+
+Note on setup cell: loads EgglogElixir and Kino, enables automatic graph displays, and defines `next.(previous, code)` for replayable steps.
+
+<!-- livebook:{"break_markdown":true} -->
+
+
+In the previous sessions, we have seen examples of defining and analyzing syntactic terms in egglog.
+After running the rewrite rules, the e-graph may contain a myriad of terms.
+We often want to pick out one or a handful of terms for further processing.
+Extraction is the process of picking out individual terms out of the many terms represented by an e-graph.
+We have seen `extract` command in the previous sessions, which allows us to extract the optimal term from the e-graph.
 
 Optimality needs to be defined with regard to some cost model.
- A cost model is a function that assigns a cost to each term in the e-graph.
- By default, `extract` uses AST size as its cost model and picks the term with the smallest cost.
+A cost model is a function that assigns a cost to each term in the e-graph.
+By default, `extract` uses AST size as its cost model and picks the term with the smallest cost.
 
-In this session, we first use the part supported by the thin wrapper: constructor costs with `:cost`. The later dynamic-cost material is preserved as reference text because it depends on experimental extension commands not accepted by the vendored parser.
+In this session, we will show several ways of customizing the cost model in egglog.
+Let's first see a simple example of setting costs with the `:cost` attribute.
 
 ```egglog
 (push)
 ```
 
 ```elixir
-step_01 = """
-(push)
-"""
-
-phase_01 = phase_00 <> "\n" <> step_01
-result = Egglog.Program.with_program(phase_00, fn program ->
-  Egglog.Program.run!(program, step_01)
-end)
-Egglog.Output.print(result)
+step_01 =
+  next.(step_00, """
+  (push)
+  """)
 ```
 
 Here we have the same Expr language but annotated with `:cost` attributes.
@@ -94,24 +99,19 @@ Here we have the same Expr language but annotated with `:cost` attributes.
 ```
 
 ```elixir
-step_02 = """
-(datatype Expr
-  (Num i64)
-  (Var String)
-  (Add Expr Expr :cost 2)
-  (Mul Expr Expr :cost 10)
-)
-"""
-
-phase_02 = phase_01 <> "\n" <> step_02
-result = Egglog.Program.with_program(phase_01, fn program ->
-  Egglog.Program.run!(program, step_02)
-end)
-Egglog.Output.print(result)
+step_02 =
+  next.(step_01, """
+  (datatype Expr
+    (Num i64)
+    (Var String)
+    (Add Expr Expr :cost 2)
+    (Mul Expr Expr :cost 10)
+  )
+  """)
 ```
 
 The default cost of a datatype constructor is 1.
- Intuitively, the additional `:cost` attributes mark the multiplication operation as more expensive than addition.
+Intuitively, the additional `:cost` attributes mark the multiplication operation as more expensive than addition.
 
 Let's look at how cost is computed for a concrete term in the default tree cost model.
 
@@ -121,46 +121,35 @@ Let's look at how cost is computed for a concrete term in the default tree cost 
 ```
 
 ```elixir
-step_03 = """
-(let expr (Add (Mul (Var "x") (Num 2)) (Num 1)))
-"""
-
-phase_03 = phase_02 <> "\n" <> step_03
-result = Egglog.Program.with_program(phase_02, fn program ->
-  Egglog.Program.run!(program, step_03)
-end)
-Egglog.Output.print(result)
+step_03 =
+  next.(step_02, """
+  (let expr (Add (Mul (Var "x") (Num 2)) (Num 1)))
+  """)
 ```
 
 This term has a total cost of 18 because
 
-```
- (Add               \\ cost = 2  (from Add) + 14 (from left operand) + 2 (from right operand) = 18
-     (Mul           \\ cost = 10 (from Mul) + 2  (from left operand) + 2 (from right operand) = 14
-         (Var "x")  \\ cost = 1  (from Var) + 1  (from "x") = 2
-         (Num 2)    \\ cost = 1  (from Num) + 1  (from 2)   = 2
-     )
-     (Num 1)        \\ cost = 1  (from Num) + 1  (from 1)   = 2
- )
-```
+    (Add               \\ cost = 2  (from Add) + 14 (from left operand) + 2 (from right operand) = 18
+        (Mul           \\ cost = 10 (from Mul) + 2  (from left operand) + 2 (from right operand) = 14
+            (Var "x")  \\ cost = 1  (from Var) + 1  (from "x") = 2
+            (Num 2)    \\ cost = 1  (from Num) + 1  (from 2)   = 2
+        )
+        (Num 1)        \\ cost = 1  (from Num) + 1  (from 1)   = 2
+    )
+
 
 We can use the `extract` command to extract the lowest cost variant of the term.
- For now it gives the only version that we just defined
+For now it gives the only version that we just defined
 
 ```egglog
 (extract expr)
 ```
 
 ```elixir
-step_04 = """
-(extract expr)
-"""
-
-phase_04 = phase_03 <> "\n" <> step_04
-result = Egglog.Program.with_program(phase_03, fn program ->
-  Egglog.Program.run!(program, step_04)
-end)
-Egglog.Output.print(result)
+step_04 =
+  next.(step_03, """
+  (extract expr)
+  """)
 ```
 
 Let's introduces more variants with rewrites
@@ -174,70 +163,42 @@ Let's introduces more variants with rewrites
 ```
 
 ```elixir
-step_05 = """
-(rewrite (Mul x (Num 2)) (Add x x))
+step_05 =
+  next.(step_04, """
+  (rewrite (Mul x (Num 2)) (Add x x))
 
-(run 1)
+  (run 1)
 
-(extract expr)
-"""
-
-phase_05 = phase_04 <> "\n" <> step_05
-result = Egglog.Program.with_program(phase_04, fn program ->
-  Egglog.Program.run!(program, step_05)
-end)
-Egglog.Output.print(result)
+  (extract expr)
+  """)
 ```
 
-The graph now contains both the original multiplication form and the expanded addition form. Extraction chooses the cheaper representative according to constructor costs, but the e-graph keeps both equivalent nodes.
-
-```elixir
-Egglog.Program.with_program(phase_05, fn program ->
-  Egglog.Program.snapshot!(program, "", render: :json)
-end)
-|> Egglog.Snapshot.summary()
-```
-
-```elixir
-Egglog.Program.with_program(phase_05, fn program ->
-  Egglog.Program.snapshot!(program, "", render: :auto)
-end)
-|> render_snapshot.()
-```
-
-It now extracts the lower cost variant that corresponds to `x + x + 1`, which is equivalent to the original term.
- If there are multiple variants of the same lowest cost, `extract` break ties arbitrarily.
+It now extracts the lower cost variant that correspondes to `x + x + 1`, which is equivalent to the original term.
+If there are multiple variants of the same lowest cost, `extract` break ties arbitrarily.
 
 ```egglog
 (pop)
 ```
 
 ```elixir
-step_06 = """
-(pop)
-"""
-
-phase_06 = phase_05 <> "\n" <> step_06
-result = Egglog.Program.with_program(phase_05, fn program ->
-  Egglog.Program.run!(program, step_06)
-end)
-Egglog.Output.print(result)
+step_06 =
+  next.(step_05, """
+  (pop)
+  """)
 ```
 
 **Setting custom cost for e-nodes**
 
 The `:cost` attribute sets an uniform additional cost to each appearance of corresponding constructor.
- However, this is not expressive enough to cover the case where additional cost of an operation is not a fixed constant.
- We can use the `set-cost` feature provided by `egglog-experimental` to get more fine-grained control of individual e-node's cost.
-
-The matrix example below is therefore conceptual in this Livebook: it shows what the upstream tutorial is teaching, but the cells are intentionally not executed through the thin wrapper.
+However, this is not expressive enough to cover the case where additional cost of an operation is not a fixed constant.
+We can use the `set-cost` feature provided by `egglog-experimental` to get more fine-grained control of individual e-node's cost.
 
 To show how this feature works, we define a toy language of matrices.
 
 `with-dynamic-cost` enables this feature for the constructors defined inside
 
 ```egglog
-(with-dynamic-cost 
+(with-dynamic-cost
     (datatype Matrix
         ; A matrix constant with fixed size
         (MConst i64 i64)
@@ -247,7 +208,15 @@ To show how this feature works, we define a toy language of matrices.
 )
 ```
 
-> This block is reference code in this Livebook clone. It uses egglog functionality outside the thin Elixir wrapper path exercised here.
+**Matrix expression**
+
+```elixir
+step_07 =
+  next.(step_06, """
+  (datatype Matrix (MConst i64 i64) (MMul Matrix Matrix))
+  (let Mexpr (MMul (MMul (MConst 64 8) (MConst 8 256)) (MConst 256 2)))
+  """)
+```
 
 We also define two analyses for the number of rows and columns
 
@@ -273,7 +242,33 @@ We also define two analyses for the number of rows and columns
 ))
 ```
 
-> This block is reference code in this Livebook clone. It uses egglog functionality outside the thin Elixir wrapper path exercised here.
+**Dimensions**
+
+```elixir
+step_08 =
+  next.(step_07, """
+  (function row (Matrix) i64 :no-merge)
+  (function col (Matrix) i64 :no-merge)
+
+  (rule (
+      (= x (MConst r c))
+  ) (
+      (set (row x) r)
+      (set (col x) c)
+  ))
+
+  (rule (
+      (= x (MMul y z))
+      (= r (row y))
+      (= (col y) (row z))
+      (= c (col z))
+  ) (
+      (set (row x) r)
+      (set (col x) c)
+  ))
+  (run 3)
+  """)
+```
 
 Now we define the cost of matrix multiplication as a product of the dimensions
 
@@ -288,8 +283,6 @@ Now we define the cost of matrix multiplication as a product of the dimensions
 ))
 ```
 
-> This block is reference code in this Livebook clone. It uses egglog functionality outside the thin Elixir wrapper path exercised here.
-
 Let's optimize matrix multiplication with this cost model
 
 ```egglog
@@ -300,7 +293,15 @@ Let's optimize matrix multiplication with this cost model
 (run 5)
 ```
 
-> This block is reference code in this Livebook clone. It uses egglog functionality outside the thin Elixir wrapper path exercised here.
+**Equivalent matrix expressions**
+
+```elixir
+step_09 =
+  next.(step_08, """
+  (birewrite (MMul x (MMul y z)) (MMul (MMul x y) z))
+  (run 1)
+  """)
+```
 
 Thanks to our cost model, egglog is able to extract the equivalent program with lowest cost using the dimension information we provided:
 
@@ -309,11 +310,9 @@ Thanks to our cost model, egglog is able to extract the equivalent program with 
 (extract Mexpr)
 ```
 
-> This block is reference code in this Livebook clone. It uses egglog functionality outside the thin Elixir wrapper path exercised here.
-
 For advanced users who want to further customize the cost model, it is possible to use define your own cost model in Rust
- using the interface egglog provides.
- Indeed, the `set-cost` feature demonstrated here is implemented outside of the core egglog codebase and
-  uses the extensible cost model interface.
+using the interface egglog provides.
+Indeed, the `set-cost` feature demonstrated here is implemented outside of the core egglog codebase and
+ uses the extensible cost model interface.
 
 We will show how to implement a simple cost model in Rust later.

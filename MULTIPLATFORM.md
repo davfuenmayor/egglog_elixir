@@ -152,12 +152,16 @@ for ARM64 and Wine 10 with the official Windows OTP ZIP for Windows x86-64.
   Coverage includes fresh-VM relocation, concurrent installs, restoration,
   native queries and renderer failure handling. The separate native smoke
   check also passed. These are emulated results, not native hardware validation.
-- Livebook 0.19.9: **all seven original notebooks passed** through its parser,
+- Before the upstream-prose refresh, Livebook 0.19.9: **all seven original notebooks passed** through its parser,
   Standalone runtime and Kino (139 executable cells). The cell checker also
   evaluated all seven twice without Graphviz on Linux and Windows/Wine. The same
   lesson cells also passed twice on ARM64 BEAM/NIF under QEMU, using preloaded
   Kino/Jason/Table BEAM files; this ARM check does not exercise dependency
   installation or Livebook's Standalone runtime. No notebook files were edited.
+- After the upstream-prose refresh, Livebook 0.19.10 evaluated all seven
+  notebooks (111 executable cells after separating index and application guide) on Linux. The cell checker also passed
+  consecutive reruns and early-step revisits with Graphviz and without it.
+  These refreshed notebooks have not been revalidated on Windows or ARM64.
 - The actual Hex archive built successfully (about **8.9 MiB**, three bundles).
   It was unpacked and installed with an **empty PATH**: no Cargo, Rust, C
   compiler, make or Graphviz. Both APIs, queries, extraction, rollback, snapshots

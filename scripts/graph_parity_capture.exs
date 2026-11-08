@@ -4,6 +4,12 @@ defmodule EgglogGraphParityCapture do
     record(Egglog.Program.snapshot!(program, input, opts))
   end
 
+  def step_next(previous, code, opts \\ []) do
+    step = Egglog.Program.Step.next(previous, code, opts)
+    record(step.snapshot)
+    step
+  end
+
   def graph_snapshot!(graph, opts \\ []) do
     record(Egglog.EGraph.snapshot!(graph, opts))
   end
@@ -34,6 +40,7 @@ defmodule EgglogGraphParityCapture do
 
   def instrument(source) do
     source
+    |> String.replace("Egglog.Program.Step.next(", "EgglogGraphParityCapture.step_next(")
     |> String.replace("Egglog.Program.snapshot!(", "EgglogGraphParityCapture.program_snapshot!(")
     |> String.replace("Egglog.EGraph.snapshot!(", "EgglogGraphParityCapture.graph_snapshot!(")
   end

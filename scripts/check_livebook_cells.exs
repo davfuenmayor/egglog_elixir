@@ -1,7 +1,7 @@
 # Fast checks; check_livebooks.exs additionally uses Livebook's real runtime.
 root = Path.expand("..", __DIR__)
 unless System.argv() in [[], ["--no-dot"]], do: raise("usage: [--no-dot]")
-Mix.install([{:egglog_elixir, path: root}, {:kino, "~> 0.19.0"}])
+Mix.install([{:egglog_elixir, path: root}, {:kino, "~> 0.19.0"}], consolidate_protocols: false)
 
 if System.get_env("EGGLOG_GRAPH_PARITY_DIR"),
   do: Code.require_file(Path.join(__DIR__, "graph_parity_capture.exs"))
@@ -53,9 +53,25 @@ for path <- Path.wildcard(Path.join(root, "livebooks/**/*.livemd")) do
     |> List.flatten()
 
   Enum.each(cells, &Code.string_to_quoted!/1)
+  if cells == [], do: IO.puts("INDEX #{Path.relative_to(path, root)}: navigation only")
 
   executable =
-    Enum.reject(cells, &String.starts_with?(String.trim(&1), "Mix.install("))
+    Enum.map(cells, fn source ->
+      statements =
+        case Code.string_to_quoted!(source) do
+          {:__block__, _, statements} -> statements
+          statement -> [statement]
+        end
+
+      # Mix.install already ran above; retain helpers now defined in the setup cell.
+      statements =
+        Enum.reject(statements, fn
+          {{:., _, [{:__aliases__, _, [:Mix]}, :install]}, _, _} -> true
+          _ -> false
+        end)
+
+      Macro.to_string({:__block__, [], statements})
+    end)
     |> Enum.map(&String.replace(&1, "Kino.Mermaid.new(", "EgglogMermaidCapture.new("))
 
   executable =
@@ -64,7 +80,14 @@ for path <- Path.wildcard(Path.join(root, "livebooks/**/*.livemd")) do
       else: executable
 
   evaluate = fn source, {binding, env} ->
-    {_, binding, env} = Code.eval_quoted_with_env(Code.string_to_quoted!(source), binding, env)
+    {value, binding, env} =
+      Code.eval_quoted_with_env(Code.string_to_quoted!(source), binding, env)
+
+    if is_struct(value, Egglog.Program.Step) and value.snapshot != nil do
+      %{type: :grid, outputs: outputs} = Kino.Render.to_livebook(value)
+      true = outputs != []
+    end
+
     {binding, env}
   end
 
@@ -77,24 +100,27 @@ for path <- Path.wildcard(Path.join(root, "livebooks/**/*.livemd")) do
         evaluate.(source, state)
       end)
 
-    # Return to declarations, negative checks, and views after later phases.
+    # Return to declarations, negative checks, and views after later steps.
     early =
-      Enum.filter(executable, &String.contains?(&1, "Egglog.Program.with_program("))
+      Enum.filter(executable, &String.contains?(&1, "next.(step_"))
       |> Enum.take(3)
 
     negative = Enum.filter(executable, &String.contains?(&1, "fail (check")) |> Enum.take(1)
-    view = Enum.filter(executable, &String.contains?(&1, "snapshot!")) |> Enum.take(1)
+    view = Enum.filter(executable, &String.contains?(&1, "next.(step_")) |> Enum.take(1)
     Enum.reduce(Enum.uniq(early ++ negative ++ view), state, evaluate)
 
     if Path.basename(path) == "getting_started.livemd" do
       {binding, _env} = state
       theory = Keyword.fetch!(binding, :math_theory)
-      edited = String.replace(theory, "(rewrite (Mul x (Num 1)) x)", "")
+
+      edited =
+        String.replace(theory, "(rewrite (Mul (Num a) (Num b))\n         (Num (* a b)))", "")
+
       true = edited != theory
 
       input = """
-      (let expected (Var "probe"))
-      (let goal (Mul expected (Num 1)))
+      (let expected (Num 6))
+      (let goal (Mul (Num 2) (Num 3)))
       (run 2)
       """
 
@@ -113,7 +139,7 @@ for path <- Path.wildcard(Path.join(root, "livebooks/**/*.livemd")) do
     end
 
     IO.puts(
-      "PASS #{Path.relative_to(path, root)}: #{length(cells)} cells; pass #{pass}, consecutive reruns and earlier-phase revisits"
+      "PASS #{Path.relative_to(path, root)}: #{length(cells)} cells; pass #{pass}, consecutive reruns and earlier-step revisits"
     )
   end
 end

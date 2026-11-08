@@ -1,73 +1,70 @@
 # Scheduling
 
-Visual snapshots in this notebook use **render: :auto**. The wrapper renders
-native DOT as Graphviz SVG when dot is available, or native JSON as Mermaid
-otherwise. Set EGGLOG_GRAPHVIZ_DOT (or GRAPHVIZ_DOT) to an executable path,
-including paths with spaces; otherwise dot is discovered on PATH. Invalid
-overrides are ignored. A detected renderer failure/timeout leaves raw DOT.
-The helper below displays the returned format without executing egglog again.
-Both renderers preserve native e-nodes and equality classes, with matching
-metadata labels and type colors. Cross-class arrows terminate at outer boxes;
-internal arrows keep their member endpoint. All classes use standard subgraphs. Mermaid uses numbered
-edges for multi-argument constructors instead of DOT ports; unary zeros are omitted. An argument still
-denotes its child's whole e-class. Layout/routing and class-member ordering can
-differ. Snapshot omission notices apply to either renderer.
-
-## Intro
-
-These notebooks are Livebook adaptations of the upstream egglog tutorial from https://egraphs-good.github.io/egglog-tutorial/. The egglog examples follow the upstream chapter order closely; the extra Elixir cells are there to make normally silent egglog state visible in Livebook.
-
-Executable blocks below are independently revisitable Program phases.
-Evaluate setup and preceding source definitions first. Each phase explicitly loads
-its previous source baseline, runs its own step on a clone, and closes the handle.
-The phase_XX values are strings, not graphs. Revisit an earlier phase without
-accumulating declarations or changing a persistent rollback stack.
-
-
-Use the local checkout below. See [installation and execution contracts](../README.md)
-for maintained platform, publication, lifecycle and limit guidance.
-
 ```elixir
-Mix.install([
-  {:egglog_elixir, path: Path.expand("../..", __DIR__)},
-  {:kino, "~> 0.19.0"}
-])
-```
+Mix.install(
+  [
+    {:egglog_elixir, path: Path.expand("../..", __DIR__)},
+    {:kino, "~> 0.19.0"}
+  ],
+  consolidate_protocols: false
+)
 
-```elixir
-render_snapshot = fn snapshot ->
-  graph = case snapshot do
-    %{format: :mermaid, mermaid: source} -> Kino.Mermaid.new(source)
-    %{format: :svg, svg: svg} -> Kino.HTML.new(svg)
-    %{text: text} -> Kino.Text.new(text)
+# Implements Kino.Render to display each step's native output and graph.
+defimpl Kino.Render, for: Egglog.Program.Step do
+  def to_livebook(%{snapshot: nil}) do
+    Kino.Render.to_livebook(Kino.Text.new("Initial step"))
   end
-  if snapshot.omitted in [nil, ""],
-    do: graph,
-    else: Kino.Layout.grid([Kino.Text.new("Partial snapshot: " <> snapshot.omitted), graph])
+
+  def to_livebook(%{snapshot: snapshot}) do
+    output = Enum.map(Egglog.Output.texts(snapshot.result), &Kino.Text.new/1)
+
+    graph =
+      case snapshot do
+        %{format: :mermaid, mermaid: source} -> Kino.Mermaid.new(source)
+        %{format: :svg, svg: svg} -> Kino.HTML.new(svg)
+        %{text: text} -> Kino.Text.new(text)
+      end
+
+    notes =
+      if snapshot.omitted in [nil, ""],
+        do: [],
+        else: [Kino.Markdown.new("Partial view: " <> snapshot.omitted)]
+
+    empty =
+      if snapshot.stats.snapshot_nodes == 0,
+        do: [Kino.Markdown.new("The e-graph is empty.")],
+        else: []
+
+    Kino.Render.to_livebook(Kino.Layout.grid(output ++ notes ++ empty ++ [graph]))
+  end
 end
 
-# Source baseline, not a native handle.
-phase_00 = ""
-```
+graph_limits = [
+  snapshot_max_functions: 12,
+  snapshot_max_calls_per_function: 6,
+  snapshot_inline_leaves: 1
+]
 
-> Scope note: the executable part of this Livebook covers rulesets,
-> `run-schedule`, `saturate`, `repeat`, and ordinary `run`. The upstream
-> chapter also uses experimental conveniences and scheduler constructs from
-> `egglog-experimental`: `with-ruleset`, `let-scheduler`, `run-with`, and
-> `back-off`. `with-ruleset` is expanded below to ordinary `:ruleset`
-> annotations. The custom scheduler blocks are preserved as reference text
-> rather than executed through the thin wrapper.
+step_00 = Egglog.Program.Step.new()
+
+next = fn previous, code ->
+  Egglog.Program.Step.next(previous, code, [render: :auto] ++ graph_limits)
+end
+
+Kino.nothing()
+```
 
 ## Scheduling
 
-This chapter is about controlling when rules run.
+[Upstream lesson](https://egraphs-good.github.io/egglog-tutorial/04-scheduling.html) · [back to index](../index.livemd)
 
-The key lesson is not that one schedule is always best. The key lesson is that equality saturation has two competing forces:
+Note on setup cell: loads EgglogElixir and Kino, enables automatic graph displays, and defines `next.(previous, code)` for replayable steps.
 
-* Analysis rules often derive useful facts without creating many new terms.
-* Optimization rewrites can create many equivalent terms, especially associativity and commutativity rules.
+<!-- livebook:{"break_markdown":true} -->
 
-Scheduling lets us spend budget where it matters. We start by using the same expression language as chapter 3.
+
+In this lesson, we will learn how to use `run-schedule` to improve the performance of egglog.
+We start by using the same language as the previous lesson.
 
 ```egglog
 (datatype Expr
@@ -83,29 +80,26 @@ Scheduling lets us spend budget where it matters. We start by using the same exp
 ```
 
 ```elixir
-step_01 = """
-(datatype Expr
-    (Num BigRat)
-    (Var String)
-    (Add Expr Expr)
-    (Mul Expr Expr)
-    (Div Expr Expr))
+step_01 =
+  next.(step_00, """
+  (datatype Expr
+      (Num BigRat)
+      (Var String)
+      (Add Expr Expr)
+      (Mul Expr Expr)
+      (Div Expr Expr))
 
-(let zero (bigrat (bigint 0) (bigint 1)))
-(let one (bigrat (bigint 1) (bigint 1)))
-(let two (bigrat (bigint 2) (bigint 1)))
-"""
-
-phase_01 = phase_00 <> "\n" <> step_01
-result = Egglog.Program.with_program(phase_00, fn program ->
-  Egglog.Program.run!(program, step_01)
-end)
-Egglog.Output.print(result)
+  (let zero (bigrat (bigint 0) (bigint 1)))
+  (let one (bigrat (bigint 1) (bigint 1)))
+  (let two (bigrat (bigint 2) (bigint 1)))
+  """)
 ```
 
 **Rulesets**
 
-Rulesets name groups of rules. Here we separate rules that derive semantic facts from rules that grow the syntactic search space.
+Different from lesson 3, we organize our rules into "rulesets"
+A ruleset is exactly what it sounds like; a set of rules.
+We can declare rulesets using the `ruleset` command.
 
 ```egglog
 (ruleset optimizations)
@@ -113,21 +107,16 @@ Rulesets name groups of rules. Here we separate rules that derive semantic facts
 ```
 
 ```elixir
-step_02 = """
-(ruleset optimizations)
-(ruleset analysis)
-"""
-
-phase_02 = phase_01 <> "\n" <> step_02
-result = Egglog.Program.with_program(phase_01, fn program ->
-  Egglog.Program.run!(program, step_02)
-end)
-Egglog.Output.print(result)
+step_02 =
+  next.(step_01, """
+  (ruleset optimizations)
+  (ruleset analysis)
+  """)
 ```
 
 We can add rules to rulesets using the `:ruleset` annotation on `rule`s, `rewrite`s, and `birewrite`s.
- Leaving off `:ruleset` causes the rule to be added to the default ruleset, which is what we've shown so far.
- We can run rulesets using `(run ruleset iters)`, or `(run iters)` for running the default ruleset.
+Leaving off `:ruleset` causes the rule to be added to the default ruleset, which is what we've shown so far.
+We can run rulesets using `(run ruleset iters)`, or `(run iters)` for running the default ruleset.
 
 Here, we add `leq` rules to the `analysis` ruleset, because they don't add new `Expr` nodes to the e-graph.
 
@@ -142,21 +131,16 @@ Here, we add `leq` rules to the `analysis` ruleset, because they don't add new `
 ```
 
 ```elixir
-step_03 = """
-(relation leq (Expr Expr))
-(rule ((leq e1 e2) (leq e2 e3)) ((leq e1 e3)) :ruleset analysis)
-(rule ((= e1 (Num n1)) (= e2 (Num n2)) (<= n1 n2)) ((leq e1 e2)) :ruleset analysis)
-(rule ((= v (Var x))) ((leq v v)) :ruleset analysis)
-(rule ((= e1 (Add e1a e1b)) (= e2 (Add e2a e2b)) (leq e1a e2a) (leq e1b e2b))
-      ((leq e1 e2))
-      :ruleset analysis)
-"""
-
-phase_03 = phase_02 <> "\n" <> step_03
-result = Egglog.Program.with_program(phase_02, fn program ->
-  Egglog.Program.run!(program, step_03)
-end)
-Egglog.Output.print(result)
+step_03 =
+  next.(step_02, """
+  (relation leq (Expr Expr))
+  (rule ((leq e1 e2) (leq e2 e3)) ((leq e1 e3)) :ruleset analysis)
+  (rule ((= e1 (Num n1)) (= e2 (Num n2)) (<= n1 n2)) ((leq e1 e2)) :ruleset analysis)
+  (rule ((= v (Var x))) ((leq v v)) :ruleset analysis)
+  (rule ((= e1 (Add e1a e1b)) (= e2 (Add e2a e2b)) (leq e1a e2a) (leq e1b e2b))
+        ((leq e1 e2))
+        :ruleset analysis)
+  """)
 ```
 
 In contrast, the following axiomatic rules are doing optimizations, so we add them to the `optimizations` ruleset.
@@ -174,148 +158,134 @@ In contrast, the following axiomatic rules are doing optimizations, so we add th
 ```
 
 ```elixir
-step_04 = """
-(birewrite (Add x (Add y z)) (Add (Add x y) z) :ruleset optimizations)
-(birewrite (Mul x (Mul y z)) (Mul (Mul x y) z) :ruleset optimizations)
-(rewrite (Add x y) (Add y x) :ruleset optimizations)
-(rewrite (Mul x y) (Mul y x) :ruleset optimizations)
-(rewrite (Mul x (Add y z)) (Add (Mul x y) (Mul x z)) :ruleset optimizations)
-(rewrite (Add x (Num zero)) x :ruleset optimizations)
-(rewrite (Mul x (Num one)) x :ruleset optimizations)
-(rewrite (Add (Num a) (Num b)) (Num (+ a b)) :ruleset optimizations)
-(rewrite (Mul (Num a) (Num b)) (Num (* a b)) :ruleset optimizations)
-"""
-
-phase_04 = phase_03 <> "\n" <> step_04
-result = Egglog.Program.with_program(phase_03, fn program ->
-  Egglog.Program.run!(program, step_04)
-end)
-Egglog.Output.print(result)
+step_04 =
+  next.(step_03, """
+  (birewrite (Add x (Add y z)) (Add (Add x y) z) :ruleset optimizations)
+  (birewrite (Mul x (Mul y z)) (Mul (Mul x y) z) :ruleset optimizations)
+  (rewrite (Add x y) (Add y x) :ruleset optimizations)
+  (rewrite (Mul x y) (Mul y x) :ruleset optimizations)
+  (rewrite (Mul x (Add y z)) (Add (Mul x y) (Mul x z)) :ruleset optimizations)
+  (rewrite (Add x (Num zero)) x :ruleset optimizations)
+  (rewrite (Mul x (Num one)) x :ruleset optimizations)
+  (rewrite (Add (Num a) (Num b)) (Num (+ a b)) :ruleset optimizations)
+  (rewrite (Mul (Num a) (Num b)) (Num (* a b)) :ruleset optimizations)
+  """)
 ```
 
 It is tedious and error-prone to manually annotate each rule with a ruleset,
- so `egglog-experimental` provides a convenience syntax `with-ruleset`:
+so `egglog-experimental` provides a convenience syntax `with-ruleset`:
 
-```
- (with-ruleset optimizations
-   (birewrite (Add x (Add y z)) (Add (Add x y) z))
-   ...
- )
-```
+    (with-ruleset optimizations
+      (birewrite (Add x (Add y z)) (Add (Add x y) z))
+      ...
+    )
 
 From now on, we will use this syntax.
+
 
 Here we add the rest of the rules from the last section, but tagged with the appropriate rulesets.
 
 ```egglog
 (function upper-bound (Expr) BigRat :merge (min old new))
 (function lower-bound (Expr) BigRat :merge (max old new))
-(rule ((leq e (Num n))) ((set (upper-bound e) n)) :ruleset analysis)
-(rule ((leq (Num n) e)) ((set (lower-bound e) n)) :ruleset analysis)
-(rule ((= e (Add e1 e2)) (= (upper-bound e1) u1) (= (upper-bound e2) u2))
-          ((set (upper-bound e) (+ u1 u2))) :ruleset analysis)
-(rule ((= e (Add e1 e2)) (= (lower-bound e1) l1) (= (lower-bound e2) l2))
-        ((set (lower-bound e) (+ l1 l2))) :ruleset analysis)
-(rule ((= e (Mul e1 e2))
+(with-ruleset analysis
+    (rule ((leq e (Num n))) ((set (upper-bound e) n)))
+    (rule ((leq (Num n) e)) ((set (lower-bound e) n)))
+    (rule ((= e (Add e1 e2)) (= (upper-bound e1) u1) (= (upper-bound e2) u2))
+          ((set (upper-bound e) (+ u1 u2))))
+    (rule ((= e (Add e1 e2)) (= (lower-bound e1) l1) (= (lower-bound e2) l2))
+        ((set (lower-bound e) (+ l1 l2))))
+
+    (rule ((= e (Mul e1 e2))
            (= le1 (lower-bound e1)) (= le2 (lower-bound e2))
            (= ue1 (upper-bound e1)) (= ue2 (upper-bound e2)))
          ((set (lower-bound e)
               (min (* le1 le2) (min (* le1 ue2) (min (* ue1 le2) (* ue1 ue2)))))
           (set (upper-bound e)
               (max (* le1 le2) (max (* le1 ue2) (max (* ue1 le2) (* ue1 ue2))))))
-     :ruleset analysis)
+    )
+)
 
 (relation non-zero (Expr))
-(rule ((< (upper-bound e) zero)) ((non-zero e)) :ruleset analysis)
-(rule ((> (lower-bound e) zero)) ((non-zero e)) :ruleset analysis)
+(with-ruleset analysis
+    (rule ((< (upper-bound e) zero)) ((non-zero e)))
+    (rule ((> (lower-bound e) zero)) ((non-zero e)))
+)
 ```
 
 ```elixir
-step_05 = """
-(function upper-bound (Expr) BigRat :merge (min old new))
-(function lower-bound (Expr) BigRat :merge (max old new))
-(rule ((leq e (Num n))) ((set (upper-bound e) n)) :ruleset analysis)
-(rule ((leq (Num n) e)) ((set (lower-bound e) n)) :ruleset analysis)
-(rule ((= e (Add e1 e2)) (= (upper-bound e1) u1) (= (upper-bound e2) u2))
-          ((set (upper-bound e) (+ u1 u2))) :ruleset analysis)
-(rule ((= e (Add e1 e2)) (= (lower-bound e1) l1) (= (lower-bound e2) l2))
-        ((set (lower-bound e) (+ l1 l2))) :ruleset analysis)
-(rule ((= e (Mul e1 e2))
-           (= le1 (lower-bound e1)) (= le2 (lower-bound e2))
-           (= ue1 (upper-bound e1)) (= ue2 (upper-bound e2)))
-         ((set (lower-bound e)
-              (min (* le1 le2) (min (* le1 ue2) (min (* ue1 le2) (* ue1 ue2)))))
-          (set (upper-bound e)
-              (max (* le1 le2) (max (* le1 ue2) (max (* ue1 le2) (* ue1 ue2))))))
-     :ruleset analysis)
+step_05 =
+  next.(step_04, """
+  (function upper-bound (Expr) BigRat :merge (min old new))
+  (function lower-bound (Expr) BigRat :merge (max old new))
+  (rule ((leq e (Num n))) ((set (upper-bound e) n)) :ruleset analysis)
+  (rule ((leq (Num n) e)) ((set (lower-bound e) n)) :ruleset analysis)
+  (rule ((= e (Add e1 e2)) (= (upper-bound e1) u1) (= (upper-bound e2) u2))
+            ((set (upper-bound e) (+ u1 u2))) :ruleset analysis)
+  (rule ((= e (Add e1 e2)) (= (lower-bound e1) l1) (= (lower-bound e2) l2))
+          ((set (lower-bound e) (+ l1 l2))) :ruleset analysis)
+  (rule ((= e (Mul e1 e2))
+             (= le1 (lower-bound e1)) (= le2 (lower-bound e2))
+             (= ue1 (upper-bound e1)) (= ue2 (upper-bound e2)))
+           ((set (lower-bound e)
+                (min (* le1 le2) (min (* le1 ue2) (min (* ue1 le2) (* ue1 ue2)))))
+            (set (upper-bound e)
+                (max (* le1 le2) (max (* le1 ue2) (max (* ue1 le2) (* ue1 ue2))))))
+       :ruleset analysis)
 
-(relation non-zero (Expr))
-(rule ((< (upper-bound e) zero)) ((non-zero e)) :ruleset analysis)
-(rule ((> (lower-bound e) zero)) ((non-zero e)) :ruleset analysis)
-"""
-
-phase_05 = phase_04 <> "\n" <> step_05
-result = Egglog.Program.with_program(phase_04, fn program ->
-  Egglog.Program.run!(program, step_05)
-end)
-Egglog.Output.print(result)
+  (relation non-zero (Expr))
+  (rule ((< (upper-bound e) zero)) ((non-zero e)) :ruleset analysis)
+  (rule ((> (lower-bound e) zero)) ((non-zero e)) :ruleset analysis)
+  """)
 ```
 
 Finally, we have optimization rules that depend on the analysis rules we defined above.
 
 ```egglog
-(rewrite (Div x x)         (Num one) :when ((non-zero x)) :ruleset optimizations)
-(rewrite (Mul x (Div y x)) y         :when ((non-zero x)) :ruleset optimizations)
+(with-ruleset optimizations
+    (rewrite (Div x x)         (Num one) :when ((non-zero x)))
+    (rewrite (Mul x (Div y x)) y         :when ((non-zero x)))
+)
 ```
 
 ```elixir
-step_06 = """
-(rewrite (Div x x)         (Num one) :when ((non-zero x)) :ruleset optimizations)
-(rewrite (Mul x (Div y x)) y         :when ((non-zero x)) :ruleset optimizations)
-"""
-
-phase_06 = phase_05 <> "\n" <> step_06
-result = Egglog.Program.with_program(phase_05, fn program ->
-  Egglog.Program.run!(program, step_06)
-end)
-Egglog.Output.print(result)
+step_06 =
+  next.(step_05, """
+  (rewrite (Div x x)         (Num one) :when ((non-zero x)) :ruleset optimizations)
+  (rewrite (Mul x (Div y x)) y         :when ((non-zero x)) :ruleset optimizations)
+  """)
 ```
 
 Now consider the following program, which consists of a long sequence of additions _inside_
- a cancelling division.
+a cancelling division.
 
 ```egglog
 (push)
 ; a + (b + (c + (d + (e + f))))
-(let addition-chain 
-    (Add (Var "a") (Add (Var "b") 
-        (Add (Var "c") (Add (Var "d") 
+(let addition-chain
+    (Add (Var "a") (Add (Var "b")
+        (Add (Var "c") (Add (Var "d")
             (Add (Var "e") (Var "f")))))))
 ; 1 + 1 + 1 + 1 + 2
-(let nonzero-expr 
-    (Add (Num one) (Add (Num one) 
+(let nonzero-expr
+    (Add (Num one) (Add (Num one)
         (Add (Num one) (Add (Num one) (Num two))))))
 (let expr (Mul nonzero-expr (Div addition-chain nonzero-expr)))
 ```
 
 ```elixir
-step_07 = """
-(push)
-(let addition-chain 
-    (Add (Var "a") (Add (Var "b") 
-        (Add (Var "c") (Add (Var "d") 
-            (Add (Var "e") (Var "f")))))))
-(let nonzero-expr 
-    (Add (Num one) (Add (Num one) 
-        (Add (Num one) (Add (Num one) (Num two))))))
-(let expr (Mul nonzero-expr (Div addition-chain nonzero-expr)))
-"""
-
-phase_07 = phase_06 <> "\n" <> step_07
-result = Egglog.Program.with_program(phase_06, fn program ->
-  Egglog.Program.run!(program, step_07)
-end)
-Egglog.Output.print(result)
+step_07 =
+  next.(step_06, """
+  (push)
+  (let addition-chain
+      (Add (Var "a") (Add (Var "b")
+          (Add (Var "c") (Add (Var "d")
+              (Add (Var "e") (Var "f")))))))
+  (let nonzero-expr
+      (Add (Num one) (Add (Num one)
+          (Add (Num one) (Add (Num one) (Num two))))))
+  (let expr (Mul nonzero-expr (Div addition-chain nonzero-expr)))
+  """)
 ```
 
 We want the following check to pass after running the rules.
@@ -325,97 +295,48 @@ We want the following check to pass after running the rules.
 ```
 
 ```elixir
-step_08 = """
-(fail (check (= expr addition-chain)))
-"""
-
-phase_08 = phase_07 <> "\n" <> step_08
-result = Egglog.Program.with_program(phase_07, fn program ->
-  Egglog.Program.run!(program, step_08)
-end)
-Egglog.Output.print(result)
-```
-
-Before any schedule runs, the e-graph contains the long addition chain and the cancelling division, but not yet the analysis facts needed by the guarded rewrite.
-
-```elixir
-Egglog.Program.with_program(phase_08, fn program ->
-  Egglog.Program.snapshot!(program, "", render: :json)
-end)
-|> Egglog.Snapshot.summary()
-```
-
-```elixir
-Egglog.Program.with_program(phase_08, fn program ->
-  Egglog.Program.snapshot!(program, "", render: :auto)
-end)
-|> render_snapshot.()
+step_08 =
+  next.(step_07, """
+  (fail (check (= expr addition-chain)))
+  """)
 ```
 
 To make this check pass, we have to first discover that `nonzero-expr` is indeed non-zero,
- which allows the rule from `(Mul x (Div y x))` to `y` to fire.
- On the other hand, if we apply the optimization rules, we risk the exponential blowup from 
- the associative and commutative permutations of the `addition-chain`.
+which allows the rule from `(Mul x (Div y x))` to `y` to fire.
+On the other hand, if we apply the optimization rules, we risk the exponential blowup from
+the associative and commutative permutations of the `addition-chain`.
 
 Therefore, if we try to run both rulesets directly, egglog will spend lots of effort reassociating and
- commuting the terms in the `addition-chain`, even though the optimization that we actually
- want to run only takes one iteration. However, that optimization requires knowing a fact
- that takes multiple iterations to compute (propagating lower- and upper-bounds
- through `nonzero-expr`). We can build a more efficient *schedule*.
+commuting the terms in the `addition-chain`, even though the optimization that we actually
+want to run only takes one iteration. However, that optimization requires knowing a fact
+that takes multiple iterations to compute (propagating lower- and upper-bounds
+through `nonzero-expr`). We can build a more efficient *schedule*.
 
 ```egglog
 (push)
 ```
 
 ```elixir
-step_09 = """
-(push)
-"""
-
-phase_09 = phase_08 <> "\n" <> step_09
-result = Egglog.Program.with_program(phase_08, fn program ->
-  Egglog.Program.run!(program, step_09)
-end)
-Egglog.Output.print(result)
+step_09 =
+  next.(step_08, """
+  (push)
+  """)
 ```
 
 **Schedules**
 
 Our schedule starts by saturating the analysis rules, fully propagating the `non-zero` information _without_
- adding any e-nodes to the e-graph.
+adding any e-nodes to the e-graph.
 
 ```egglog
 (run-schedule (saturate (run analysis)))
 ```
 
 ```elixir
-step_10 = """
-(run-schedule (saturate (run analysis)))
-"""
-
-phase_10 = phase_09 <> "\n" <> step_10
-result = Egglog.Program.with_program(phase_09, fn program ->
-  Egglog.Program.run!(program, step_10)
-end)
-Egglog.Output.print(result)
-```
-
-After saturating only the analysis rules, the useful facts have been derived without running the associativity/commutativity-heavy optimization ruleset.
-
-Compare this summary with the previous one: the database has learned facts, but it has avoided most term explosion.
-
-```elixir
-Egglog.Program.with_program(phase_10, fn program ->
-  Egglog.Program.snapshot!(program, "", render: :json)
-end)
-|> Egglog.Snapshot.summary()
-```
-
-```elixir
-Egglog.Program.with_program(phase_10, fn program ->
-  Egglog.Program.snapshot!(program, "", render: :auto)
-end)
-|> render_snapshot.()
+step_10 =
+  next.(step_09, """
+  (run-schedule (saturate (run analysis)))
+  """)
 ```
 
 Then, just run one iteration of the `optimizations` ruleset.
@@ -425,40 +346,17 @@ Then, just run one iteration of the `optimizations` ruleset.
 ```
 
 ```elixir
-step_11 = """
-(run optimizations 1)
-"""
-
-phase_11 = phase_10 <> "\n" <> step_11
-result = Egglog.Program.with_program(phase_10, fn program ->
-  Egglog.Program.run!(program, step_11)
-end)
-Egglog.Output.print(result)
-```
-
-Now the guarded optimization has had a chance to use the analysis facts. Comparing this snapshot with the previous one shows why schedule order matters.
-
-```elixir
-Egglog.Program.with_program(phase_11, fn program ->
-  Egglog.Program.snapshot!(program, "", render: :json)
-end)
-|> Egglog.Snapshot.summary()
-```
-
-```elixir
-Egglog.Program.with_program(phase_11, fn program ->
-  Egglog.Program.snapshot!(program, "", render: :auto)
-end)
-|> render_snapshot.()
+step_11 =
+  next.(step_10, """
+  (run optimizations 1)
+  """)
 ```
 
 Or equivalently,
 
-```
- (run-schedule 
-     (saturate (run analysis))
-     (run optimizations))
-```
+    (run-schedule
+        (saturate (run analysis))
+        (run optimizations))
 
 This makes our check pass
 
@@ -468,24 +366,30 @@ This makes our check pass
 ```
 
 ```elixir
-step_12 = """
-(check (= expr addition-chain))
-(pop)
-"""
-
-phase_12 = phase_11 <> "\n" <> step_12
-result = Egglog.Program.with_program(phase_11, fn program ->
-  Egglog.Program.run!(program, step_12)
-end)
-Egglog.Output.print(result)
+step_12 =
+  next.(step_11, """
+  (check (= expr addition-chain))
+  """)
 ```
 
-The one-shot schedule above is effective for this specific term, but some problems require interleaving: optimize a little, analyze the new terms, optimize again. Egglog's scheduling language gives explicit control with primitives such as `repeat`, `seq`, `saturate`, and `run`.
+```elixir
+step_13 =
+  next.(step_12, """
+  (pop)
+  """)
+```
+
+While the above program is effective at optimizing that specific program, it would fail if
+we had a slightly more complex program where we had to interleave the optimizations and analyses
+to derive the optimal program.
+For expressing more complex schedules like these, `egglog` supports a scheduling sub-language,
+with primitives `repeat`, `seq`, `saturate`, and `run`.
+
 
 The idea behind the following schedule is to always saturate analyses before running optimizations.
- This combination is wrapped in a `repeat` block to give us control over how long to run egglog.
- With `repeat 1` it is the same schedule as before, but now we can increase the iteration
- count if we want to optimize harder with more time and space budget.
+This combination is wrapped in a `repeat` block to give us control over how long to run egglog.
+With `repeat 1` it is the same schedule as before, but now we can increase the iteration
+count if we want to optimize harder with more time and space budget.
 
 ```egglog
 (run-schedule
@@ -496,58 +400,54 @@ The idea behind the following schedule is to always saturate analyses before run
 ```
 
 ```elixir
-step_13 = """
-(run-schedule
-    (repeat 2
-        (saturate (run analysis))
-        (run optimizations)))
-(pop)
-"""
+step_14 =
+  next.(step_13, """
+  (run-schedule
+      (repeat 2
+          (saturate (run analysis))
+          (run optimizations)))
+  """)
+```
 
-phase_13 = phase_12 <> "\n" <> step_13
-result = Egglog.Program.with_program(phase_12, fn program ->
-  Egglog.Program.run!(program, step_13)
-end)
-Egglog.Output.print(result)
+```elixir
+step_15 =
+  next.(step_14, """
+  (pop)
+  """)
 ```
 
 Running more iterations does not help our above example per se,
- but if we had started with a slightly more complex program to optimize...
+but if we had started with a slightly more complex program to optimize...
 
 ```egglog
 ; a + (b + (c + (d + (e + f))))
-(let addition-chain 
-    (Add (Var "a") (Add (Var "b") 
-        (Add (Var "c") (Add (Var "d") 
+(let addition-chain
+    (Add (Var "a") (Add (Var "b")
+        (Add (Var "c") (Add (Var "d")
             (Add (Var "e") (Var "f")))))))
 ; x * 0
 (let x-times-zero (Mul (Var "x") (Num zero)))
-(let nonzero-expr 
-    (Add (Num one) (Add (Num one) 
-        (Add (Num one) (Add (Num one) 
+(let nonzero-expr
+    (Add (Num one) (Add (Num one)
+        (Add (Num one) (Add (Num one)
             x-times-zero)))))
 (let expr (Mul nonzero-expr (Div addition-chain nonzero-expr)))
 ```
 
 ```elixir
-step_14 = """
-(let addition-chain 
-    (Add (Var "a") (Add (Var "b") 
-        (Add (Var "c") (Add (Var "d") 
-            (Add (Var "e") (Var "f")))))))
-(let x-times-zero (Mul (Var "x") (Num zero)))
-(let nonzero-expr 
-    (Add (Num one) (Add (Num one) 
-        (Add (Num one) (Add (Num one) 
-            x-times-zero)))))
-(let expr (Mul nonzero-expr (Div addition-chain nonzero-expr)))
-"""
-
-phase_14 = phase_13 <> "\n" <> step_14
-result = Egglog.Program.with_program(phase_13, fn program ->
-  Egglog.Program.run!(program, step_14)
-end)
-Egglog.Output.print(result)
+step_16 =
+  next.(step_15, """
+  (let addition-chain
+      (Add (Var "a") (Add (Var "b")
+          (Add (Var "c") (Add (Var "d")
+              (Add (Var "e") (Var "f")))))))
+  (let x-times-zero (Mul (Var "x") (Num zero)))
+  (let nonzero-expr
+      (Add (Num one) (Add (Num one)
+          (Add (Num one) (Add (Num one)
+              x-times-zero)))))
+  (let expr (Mul nonzero-expr (Div addition-chain nonzero-expr)))
+  """)
 ```
 
 For the purpose of this example, we add this rule
@@ -557,24 +457,19 @@ For the purpose of this example, we add this rule
 ```
 
 ```elixir
-step_15 = """
-(rewrite (Mul x (Num zero)) (Num zero) :ruleset optimizations)
-"""
-
-phase_15 = phase_14 <> "\n" <> step_15
-result = Egglog.Program.with_program(phase_14, fn program ->
-  Egglog.Program.run!(program, step_15)
-end)
-Egglog.Output.print(result)
+step_17 =
+  next.(step_16, """
+  (rewrite (Mul x (Num zero)) (Num zero) :ruleset optimizations)
+  """)
 ```
 
-To prove `expr` is equivalent to `addition-chian` by applying the cancellation law, 
- we need to prove `nonzero-expr` is nonzero, which requires proving
- `x-times-zero`'s bound.
- To show `x-time-zero`'s bound, we need to apply an optimization rule to rewrite
- it to 0.
- In other words, this requires running analyses in between two runs of optimization rules
- (the cancellation law and `Mul`'s identity law)
+To prove `expr` is equivalent to `addition-chian` by applying the cancellation law,
+we need to prove `nonzero-expr` is nonzero, which requires proving
+`x-times-zero`'s bound.
+To show `x-time-zero`'s bound, we need to apply an optimization rule to rewrite
+it to 0.
+In other words, this requires running analyses in between two runs of optimization rules
+(the cancellation law and `Mul`'s identity law)
 
 Therefore, only running our schedule with one iteration (`repeat 1`) does not give us the optimal program.
 
@@ -589,21 +484,22 @@ Therefore, only running our schedule with one iteration (`repeat 1`) does not gi
 ```
 
 ```elixir
-step_16 = """
-(push)
-(run-schedule
-    (repeat 1
-        (saturate (run analysis))
-        (run optimizations)))
-(extract expr)
-(pop)
-"""
+step_18 =
+  next.(step_17, """
+  (push)
+  (run-schedule
+      (repeat 1
+          (saturate (run analysis))
+          (run optimizations)))
+  (extract expr)
+  """)
+```
 
-phase_16 = phase_15 <> "\n" <> step_16
-result = Egglog.Program.with_program(phase_15, fn program ->
-  Egglog.Program.run!(program, step_16)
-end)
-Egglog.Output.print(result)
+```elixir
+step_19 =
+  next.(step_18, """
+  (pop)
+  """)
 ```
 
 Instead, we need to increase the iteration number.
@@ -619,30 +515,29 @@ Instead, we need to increase the iteration number.
 ```
 
 ```elixir
-step_17 = """
-(push)
-(run-schedule
-    (repeat 2
-        (saturate (run analysis))
-        (run optimizations)))
-(extract expr)
-(pop)
-"""
-
-phase_17 = phase_16 <> "\n" <> step_17
-result = Egglog.Program.with_program(phase_16, fn program ->
-  Egglog.Program.run!(program, step_17)
-end)
-Egglog.Output.print(result)
+step_20 =
+  next.(step_19, """
+  (push)
+  (run-schedule
+      (repeat 2
+          (saturate (run analysis))
+          (run optimizations)))
+  (extract expr)
+  """)
 ```
 
-The contrast between `repeat 1` and `repeat 2` is the point of the example. The first schedule cannot prove enough facts before extraction; the second gives the analysis a second chance after optimization has simplified `x * 0`.
+```elixir
+step_21 =
+  next.(step_20, """
+  (pop)
+  """)
+```
 
 **Using custom schedulers**
 
 However, sometimes just having an iteration number does not give you enough control.
- For example, for many rules, such as associativity and commutativity (AC), the size of the e-graph grows hyper-exponentially
- with respect to the number of iterations.
+For example, for many rules, such as associativity and commutativity (AC), the size of the e-graph grows hyper-exponentially
+with respect to the number of iterations.
 
 Let's go back to this example, and run for five iterations.
 
@@ -657,39 +552,40 @@ Let's go back to this example, and run for five iterations.
 ```
 
 ```elixir
-step_18 = """
-(push)
-(run-schedule
-    (repeat 5
-        (saturate (run analysis))
-        (run optimizations)))
-(print-size Mul)
-(pop)
-"""
+step_22 =
+  next.(step_21, """
+  (push)
+  (run-schedule
+      (repeat 5
+          (saturate (run analysis))
+          (run optimizations)))
+  (print-size Mul)
+  """)
+```
 
-phase_18 = phase_17 <> "\n" <> step_18
-result = Egglog.Program.with_program(phase_17, fn program ->
-  Egglog.Program.run!(program, step_18)
-end)
-Egglog.Output.print(result)
+```elixir
+step_23 =
+  next.(step_22, """
+  (pop)
+  """)
 ```
 
 At iteration 5, the `Mul` function has size 582. However, if we bump that to 6,
- the size of the `Mul` function will increase to 13285! Therefore, the iteration number is too coarse 
- of a granularity for defining the search space.
+the size of the `Mul` function will increase to 13285! Therefore, the iteration number is too coarse
+of a granularity for defining the search space.
 
 To this end, egglog provides a scheduler mechanism. A scheduler can decide which matches are important and need to be applied,
- while others can be delayed or skipped. To use scheduler, there are two operations: `let-scheduler` and `run-with`.
- `(let-scheduler sched ..)` instantiates a scheduler `sched`, and `(run-with sched ruleset)` rules a ruleset with that scheduler.
+while others can be delayed or skipped. To use scheduler, there are two operations: `let-scheduler` and `run-with`.
+`(let-scheduler sched ..)` instantiates a scheduler `sched`, and `(run-with sched ruleset)` rules a ruleset with that scheduler.
 
 Currently, `egglog-experimental` implements one scheduler, `back-off`. (We will implement our own scheduler
- in Section 6.) The idea of `back-off` is that it will ban a rule from applying if that rule grows the
- e-graph too fast. The decision to ban is based on a threshold, which is initially small and increases as rules are banned.
- This scheduler works well when the ruleset contains explosive rules like AC.
+in Section 6.) The idea of `back-off` is that it will ban a rule from applying if that rule grows the
+e-graph too fast. The decision to ban is based on a threshold, which is initially small and increases as rules are banned.
+This scheduler works well when the ruleset contains explosive rules like AC.
 
 In this example, the back-off scheduler can prevent the associativity rule
- from dominating the equality saturation: when the the associativity rule (or any other rule) is fired too much,
- the scheduler will automatically ban this rule for a few iterations, so that other rules can catch up.
+from dominating the equality saturation: when the the associativity rule (or any other rule) is fired too much,
+the scheduler will automatically ban this rule for a few iterations, so that other rules can catch up.
 
 ```egglog
 (run-schedule
@@ -698,17 +594,13 @@ In this example, the back-off scheduler can prevent the associativity rule
 (print-size Mul)
 ```
 
-> This block is reference code in this Livebook clone. It uses egglog functionality outside the thin Elixir wrapper path exercised here.
-
 It is important that the scheduler `bo` is instantiated outside the `repeat` loop, since each scheduler carries some state that is updated
- when run. For example, the following schedule has a very semantics than the schedule above.
+when run. For example, the following schedule has a very semantics than the schedule above.
 
-```
- (run-schedule
-     (repeat 10
-         (let-scheduler bo (back-off))
-         (run-with bo optimizations)))
-```
+    (run-schedule
+        (repeat 10
+            (let-scheduler bo (back-off))
+            (run-with bo optimizations)))
 
 This schedule instantiates a (fresh) `back-off` scheduler for each `run-with`, so the ten iterations of rulesets are all run
- with the initial configuration of the `back-off` scheduler, which has a very low threshold for banning rules.
+with the initial configuration of the `back-off` scheduler, which has a very low threshold for banning rules.

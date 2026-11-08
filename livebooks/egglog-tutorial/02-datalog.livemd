@@ -1,100 +1,94 @@
 # Datalog
 
-Visual snapshots in this notebook use **render: :auto**. The wrapper renders
-native DOT as Graphviz SVG when dot is available, or native JSON as Mermaid
-otherwise. Set EGGLOG_GRAPHVIZ_DOT (or GRAPHVIZ_DOT) to an executable path,
-including paths with spaces; otherwise dot is discovered on PATH. Invalid
-overrides are ignored. A detected renderer failure/timeout leaves raw DOT.
-The helper below displays the returned format without executing egglog again.
-Both renderers preserve native e-nodes and equality classes, with matching
-metadata labels and type colors. Cross-class arrows terminate at outer boxes;
-internal arrows keep their member endpoint. All classes use standard subgraphs. Mermaid uses numbered
-edges for multi-argument constructors instead of DOT ports; unary zeros are omitted. An argument still
-denotes its child's whole e-class. Layout/routing and class-member ordering can
-differ. Snapshot omission notices apply to either renderer.
-
-## Intro
-
-These notebooks are Livebook adaptations of the upstream egglog tutorial from https://egraphs-good.github.io/egglog-tutorial/. The egglog examples follow the upstream chapter order closely; the extra Elixir cells are there to make normally silent egglog state visible in Livebook.
-
-Executable blocks below are independently revisitable Program phases.
-Evaluate setup and preceding source definitions first. Each phase explicitly loads
-its previous source baseline, runs its own step on a clone, and closes the handle.
-The phase_XX values are strings, not graphs. Revisit an earlier phase without
-accumulating declarations or changing a persistent rollback stack.
-
-
-Use the local checkout below. See [installation and execution contracts](../README.md)
-for maintained platform, publication, lifecycle and limit guidance.
-
 ```elixir
-Mix.install([
-  {:egglog_elixir, path: Path.expand("../..", __DIR__)},
-  {:kino, "~> 0.19.0"}
-])
-```
+Mix.install(
+  [
+    {:egglog_elixir, path: Path.expand("../..", __DIR__)},
+    {:kino, "~> 0.19.0"}
+  ],
+  consolidate_protocols: false
+)
 
-```elixir
-render_snapshot = fn snapshot ->
-  graph = case snapshot do
-    %{format: :mermaid, mermaid: source} -> Kino.Mermaid.new(source)
-    %{format: :svg, svg: svg} -> Kino.HTML.new(svg)
-    %{text: text} -> Kino.Text.new(text)
+# Implements Kino.Render to display each step's native output and graph.
+defimpl Kino.Render, for: Egglog.Program.Step do
+  def to_livebook(%{snapshot: nil}) do
+    Kino.Render.to_livebook(Kino.Text.new("Initial step"))
   end
-  if snapshot.omitted in [nil, ""],
-    do: graph,
-    else: Kino.Layout.grid([Kino.Text.new("Partial snapshot: " <> snapshot.omitted), graph])
+
+  def to_livebook(%{snapshot: snapshot}) do
+    output = Enum.map(Egglog.Output.texts(snapshot.result), &Kino.Text.new/1)
+
+    graph =
+      case snapshot do
+        %{format: :mermaid, mermaid: source} -> Kino.Mermaid.new(source)
+        %{format: :svg, svg: svg} -> Kino.HTML.new(svg)
+        %{text: text} -> Kino.Text.new(text)
+      end
+
+    notes =
+      if snapshot.omitted in [nil, ""],
+        do: [],
+        else: [Kino.Markdown.new("Partial view: " <> snapshot.omitted)]
+
+    empty =
+      if snapshot.stats.snapshot_nodes == 0,
+        do: [Kino.Markdown.new("The e-graph is empty.")],
+        else: []
+
+    Kino.Render.to_livebook(Kino.Layout.grid(output ++ notes ++ empty ++ [graph]))
+  end
 end
 
-# Source baseline, not a native handle.
-phase_00 = ""
+graph_limits = [
+  snapshot_max_functions: 12,
+  snapshot_max_calls_per_function: 6,
+  snapshot_inline_leaves: 1
+]
+
+step_00 = Egglog.Program.Step.new()
+
+next = fn previous, code ->
+  Egglog.Program.Step.next(previous, code, [render: :auto] ++ graph_limits)
+end
+
+Kino.nothing()
 ```
 
 ## Datalog
 
-Datalog is a relational language for deductive reasoning. In chapter 1, rules mostly enlarged equivalence classes of terms. Here, rules also derive rows of relations and functions.
+[Upstream lesson](https://egraphs-good.github.io/egglog-tutorial/02-datalog.html) · [back to index](../index.livemd)
 
-The useful unifying picture is this:
+Note on setup cell: loads EgglogElixir and Kino, enables automatic graph displays, and defines `next.(previous, code)` for replayable steps.
 
-* A relation such as `(edge 1 2)` is a table row.
-* A function such as `(path 1 3) -> 20` is a table row with a distinguished output value.
-* A constructor such as `(mk 3)` is also function-like: equal inputs imply equal outputs.
-* Equality saturation and Datalog-style rule evaluation share the same e-graph database.
+<!-- livebook:{"break_markdown":true} -->
 
-This chapter has three examples:
-
-1. Transitive closure as a relation.
-2. Shortest paths as a function with a merge expression.
-3. Reachability over unionable terms, where congruence closure and Datalog interact.
+Datalog is a relational language for deductive reasoning. In the last lesson, we write our first
+equality saturation program in egglog, but you can also write rules for deductive reasoning a la Datalog.
+In this lesson, we will write several classic Datalog programs in egglog. One of the benifits
+of egglog being a language for program optimization is that it can talk about terms natively,
+so in egglog we get Datalog with terms for free.
 
 In this lesson, we will define multiple relations with the same name,
- so we use the `(push)` and `(pop)` commands to clone and reset the database.
- Under the hood, `(push)` clones the current database and pushes it onto a stack,
- and `(pop)` resets the database to the top of the stack.
+so we use the `(push)` and `(pop)` commands to clone and reset the database.
+Under the hood, `(push)` clones the current database and pushes it onto a stack,
+and `(pop)` resets the database to the top of the stack.
 
 ```egglog
 (push)
 ```
 
 ```elixir
-step_01 = """
-(push)
-"""
-
-phase_01 = phase_00 <> "\n" <> step_01
-result = Egglog.Program.with_program(phase_00, fn program ->
-  Egglog.Program.run!(program, step_01)
-end)
-Egglog.Output.print(result)
+step_01 =
+  next.(step_00, """
+  (push)
+  """)
 ```
-
-`push` and `pop` are native egglog commands. They operate on the reconstructed native baseline, so the stack behavior is visible across cells.
 
 Let's first define relations edge and path.
- We use `(edge a b)` to mean the tuple (a, b) is in the `edge` relation.
- `(edge a b)` means there are directed edges from `a` to `b`,
- and we will use it to compute the `path` relation,
- where `(path a b)` means there is a (directed) path from `a` to `b`.
+We use `(edge a b)` to mean the tuple (a, b) is in the `edge` relation.
+`(edge a b)` means there are directed edges from `a` to `b`,
+and we will use it to compute the `path` relation,
+where `(path a b)` means there is a (directed) path from `a` to `b`.
 
 ```egglog
 (relation edge (i64 i64))
@@ -102,16 +96,11 @@ Let's first define relations edge and path.
 ```
 
 ```elixir
-step_02 = """
-(relation edge (i64 i64))
-(relation path (i64 i64))
-"""
-
-phase_02 = phase_01 <> "\n" <> step_02
-result = Egglog.Program.with_program(phase_01, fn program ->
-  Egglog.Program.run!(program, step_02)
-end)
-Egglog.Output.print(result)
+step_02 =
+  next.(step_01, """
+  (relation edge (i64 i64))
+  (relation path (i64 i64))
+  """)
 ```
 
 We can insert edges into our relation by asserting facts:
@@ -123,26 +112,21 @@ We can insert edges into our relation by asserting facts:
 ```
 
 ```elixir
-step_03 = """
-(edge 1 2)
-(edge 2 3)
-(edge 3 4)
-"""
-
-phase_03 = phase_02 <> "\n" <> step_03
-result = Egglog.Program.with_program(phase_02, fn program ->
-  Egglog.Program.run!(program, step_03)
-end)
-Egglog.Output.print(result)
+step_03 =
+  next.(step_02, """
+  (edge 1 2)
+  (edge 2 3)
+  (edge 3 4)
+  """)
 ```
 
 Fact definitions are similar to definitions using `(let ..)` definitions in the last lesson,
- in that facts are immediately added to relations.
+in that facts are immediately added to relations.
 
 Now let's tell egglog how to derive the `path` relation.
 
 First, if an edge from a to b exists, then it is already a proof
- that there exists a path from a to b.
+that there exists a path from a to b.
 
 ```egglog
 (rule ((edge a b))
@@ -150,33 +134,28 @@ First, if an edge from a to b exists, then it is already a proof
 ```
 
 ```elixir
-step_04 = """
-(rule ((edge a b))
-      ((path a b)))
-"""
-
-phase_04 = phase_03 <> "\n" <> step_04
-result = Egglog.Program.with_program(phase_03, fn program ->
-  Egglog.Program.run!(program, step_04)
-end)
-Egglog.Output.print(result)
+step_04 =
+  next.(step_03, """
+  (rule ((edge a b))
+        ((path a b)))
+  """)
 ```
 
 A rule has the form `(rule (atom1 atom2 ..) (action1 action2 ..))`.
 
-For the rule we have just defined, the only atom in the query is `(edge a b)`, which asks egglog to search
- for possible `a` and `b` such that `(edge a b)` is a fact in the database.
+For the rule we have just defined, the only atom is `(edge a b)`, which asks egglog to search
+for possible `a` and `b`s such that `(edge a b)` is a fact in the database.
 
-We call the first part the "query" of a rule, and the second part the "actions" of a rule.
- In Datalog terminology, confusingly, the first part is called the "body" of the rule
- while the second part is called the "head" of the rule. This is because Datalog rules
- are usually written as `head :- body`. To avoid confusion, we will refrain from using
- Datalog terminology.
+We call the first part the "query" of a rule, and the second part the "body" of a rule.
+In Datalog terminology, confusingly, the first part is called the "body" of the rule
+while the second part is called the "head" of the rule. This is because Datalog rules
+are usually written as `head :- body`. To avoid confusion, we will refrain from using
+Datalog terminology.
 
 The rule above defines the base case of the path relation. The inductive case reads as follows:
- if we know there is a path from `a` to `b`, and there is an edge from `b` to `c`, then
- there is also a path from `a` to `c`.
- This can be expressed as egglog rule below:
+if we know there is a path from `a` to `b`, and there is an edge from `b` to `c`, then
+there is also a path from `a` to `c`.
+This can be expressed as egglog rule below:
 
 ```egglog
 (rule ((path a b) (edge b c))
@@ -184,36 +163,26 @@ The rule above defines the base case of the path relation. The inductive case re
 ```
 
 ```elixir
-step_05 = """
-(rule ((path a b) (edge b c))
-      ((path a c)))
-"""
-
-phase_05 = phase_04 <> "\n" <> step_05
-result = Egglog.Program.with_program(phase_04, fn program ->
-  Egglog.Program.run!(program, step_05)
-end)
-Egglog.Output.print(result)
+step_05 =
+  next.(step_04, """
+  (rule ((path a b) (edge b c))
+        ((path a c)))
+  """)
 ```
 
 Again, defining a rule does not mean running it in egglog, which may be a surprise to those familiar with Datalog.
- The user still needs to run the program.
- For instance, the following check would fail at this point.
+The user still needs to run the program.
+For instance, the following check would fail at this point.
 
 ```egglog
 (fail (check (path 1 4)))
 ```
 
 ```elixir
-step_06 = """
-(fail (check (path 1 4)))
-"""
-
-phase_06 = phase_05 <> "\n" <> step_06
-result = Egglog.Program.with_program(phase_05, fn program ->
-  Egglog.Program.run!(program, step_06)
-end)
-Egglog.Output.print(result)
+step_06 =
+  next.(step_05, """
+  (fail (check (path 1 4)))
+  """)
 ```
 
 But it passes after we run our rules for 10 iterations.
@@ -221,58 +190,29 @@ But it passes after we run our rules for 10 iterations.
 ```egglog
 (run 10)
 (check (path 1 4)) ; this succeeds
-(print-function path 20)
 ```
 
 ```elixir
-step_07 = """
-(run 10)
-(check (path 1 4))
-(print-function path 20)
-"""
-
-phase_07 = phase_06 <> "\n" <> step_07
-result = Egglog.Program.with_program(phase_06, fn program ->
-  Egglog.Program.run!(program, step_07)
-end)
-Egglog.Output.print(result)
-```
-
-The relation table already shows the derived paths. The graph view is a complementary picture: relation facts appear as nodes, and the saturated transitive closure becomes visible as a larger connected structure.
-
-For a compact, non-visual inspection, the JSON snapshot gives counts by operator. This is useful when the graph drawing is too busy.
-
-```elixir
-Egglog.Program.with_program(phase_07, fn program ->
-  Egglog.Program.snapshot!(program, "", render: :json)
-end)
-|> Egglog.Snapshot.summary()
-```
-
-```elixir
-Egglog.Program.with_program(phase_07, fn program ->
-  Egglog.Program.snapshot!(program, "", render: :auto)
-end)
-|> render_snapshot.()
+step_07 =
+  next.(step_06, """
+  (run 10)
+  (check (path 1 4))
+  (print-function path 20)
+  """)
 ```
 
 For many deductive rules, we do not know the number of iterations
- needed to reach a fixpoint. The egglog language provides the `saturate` scheduling primitive to run the rules until fixpoint.
+needed to reach a fixpoint. The egglog language provides the `saturate` scheduling primitive to run the rules until fixpoint.
 
 ```egglog
 (run-schedule (saturate (run)))
 ```
 
 ```elixir
-step_08 = """
-(run-schedule (saturate (run)))
-"""
-
-phase_08 = phase_07 <> "\n" <> step_08
-result = Egglog.Program.with_program(phase_07, fn program ->
-  Egglog.Program.run!(program, step_08)
-end)
-Egglog.Output.print(result)
+step_08 =
+  next.(step_07, """
+  (run-schedule (saturate (run)))
+  """)
 ```
 
 We will cover more details about schedules later in the tutorial.
@@ -282,12 +222,12 @@ We will cover more details about schedules later in the tutorial.
 Consider the variant of our last rule:
 
 ```
- (rule ((path a b) (path b c))
-       ((path a c)))
+(rule ((path a b) (path b c))
+      ((path a c)))
 ```
 
-Does this rule compute the same relation as the original rule? How does this rule 
- compare to the original rule? Hint: it's slow, why?
+Does this rule compute the same relation as the original rule? How does this rule
+compare to the original rule? Hint: it's slow, why?
 
 ---
 
@@ -297,21 +237,22 @@ Does this rule compute the same relation as the original rule? How does this rul
 ```
 
 ```elixir
-step_09 = """
-(pop)
-(push)
-"""
+step_09 =
+  next.(step_08, """
+  (pop)
+  """)
+```
 
-phase_09 = phase_08 <> "\n" <> step_09
-result = Egglog.Program.with_program(phase_08, fn program ->
-  Egglog.Program.run!(program, step_09)
-end)
-Egglog.Output.print(result)
+```elixir
+step_10 =
+  next.(step_09, """
+  (push)
+  """)
 ```
 
 Our last example determines whether there is a path from one node to another,
- but we don't know the details about the path.
- Let's slightly extend our program to obtain the length of the shortest path between any two nodes.
+but we don't know the details about the path.
+Let's slightly extend our program to obtain the length of the shortest path between any two nodes.
 
 ```egglog
 (function edge (i64 i64) i64 :no-merge)
@@ -319,45 +260,35 @@ Our last example determines whether there is a path from one node to another,
 ```
 
 ```elixir
-step_10 = """
-(function edge (i64 i64) i64 :no-merge)
-(function path (i64 i64) i64 :merge (min old new))
-"""
-
-phase_10 = phase_09 <> "\n" <> step_10
-result = Egglog.Program.with_program(phase_09, fn program ->
-  Egglog.Program.run!(program, step_10)
-end)
-Egglog.Output.print(result)
-```
-
-```elixir
-Egglog.Program.with_program(phase_10, fn program ->
-  Egglog.Program.snapshot!(program, "", render: :auto)
-end) |> render_snapshot.()
+step_11 =
+  next.(step_10, """
+  (function edge (i64 i64) i64 :no-merge)
+  (function path (i64 i64) i64 :merge (min old new))
+  """)
 ```
 
 Here, we use a new keyword called `function` to define a table that respects the functional dependency.
- A relation is just a function with output domain `Unit`.
- By defining `edge` and `path` with `function`, we can associate a length to each path.
+A relation is just a function with output domain `Unit`.
+By defining `edge` and `path` with `function`, we can associate a length to each path.
 
-What happens if the same tuple of a function is mapped to two values?
- In the case of relation, this is easy: `Unit` only has one value, so the two values must be identical.
- But in general, that would be a violation of functional dependency, the property that `a = b` implies `f(a) = f(b)`.
- Egglog allows us to specify how to reconcile two values that are mapped from the same tuple using _merge expressions_.
+What happens it the same tuple of a function is mapped to two values?
+In the case of relation, this is easy: `Unit` only has one value, so the two values must be identical.
+But in general, that would be a violation of functional dependency, the property that `a = b` implies `f(a) = f(b)`.
+Egglog allows us to specify how to reconcile two values that are mapped from the same tuple using _merge expressions_.
 
 For instance, for `path`, the merge expression is `(min old new)`; `old` and `new` are two special values in an expression
- that denotes the current output of the tuple and the output of the new, to-be-inserted value.
- The merge expression for `path` says that, when there are two paths from `a` to `b` with lengths `old` and `new`,
- we keep the shorter one, i.e., `(min old new)`.
+that denotes the current output of the tuple and the output of the new, to-be-inserted value.
+The merge expression for `path` says that, when there are two paths from `a` to `b` with lengths `old` and `new`,
+we keep the shorter one, i.e., `(min old new)`.
 
 For `edge`, we can define the merge expression the same as `path`, which means that we only keep the shortest edge
- if there are multiple edges. But we can also assert that `edge` does not have a merge expression using `:no-merge`. 
- This means we don't expect there will be multiple edges between two nodes. More generally, it is the user's
- responsibility to ensure no tuples with conflicting output values exist. If a conflict happens, native egglog reports an error through the wrapper.
+if there are multiple edges. But we can also assert that `edge` does not have a merge expression using `no-merge`.
+This means we don't expect there will be multiple edges between two nodes. More generally, it is the user's
+responsibility to ensure no tuples with conflicting output values exist. If a conflict happens, egglog will
+panic.
 
 Now let's insert the same edges as before, but we will assign a length to each edge. This is done using the `set` action,
- which takes a tuple and an output value:
+which takes a tuple and an output value:
 
 ```egglog
 (set (edge 1 2) 10)
@@ -366,45 +297,35 @@ Now let's insert the same edges as before, but we will assign a length to each e
 ```
 
 ```elixir
-step_11 = """
-(set (edge 1 2) 10)
-(set (edge 2 3) 10)
-(set (edge 1 3) 30)
-"""
-
-phase_11 = phase_10 <> "\n" <> step_11
-result = Egglog.Program.with_program(phase_10, fn program ->
-  Egglog.Program.run!(program, step_11)
-end)
-Egglog.Output.print(result)
+step_12 =
+  next.(step_11, """
+  (set (edge 1 2) 10)
+  (set (edge 2 3) 10)
+  (set (edge 1 3) 30)
+  """)
 ```
 
-Let us define the edge base rule and transitive rule for the `path` function.
- In this rule, we use the `set` action to set the output value of the `path` function.
- On the query side, we use `=` to bind the output value of a function.
+Let us define the reflexive rule and transitive rule for the `path` function.
+In this rule, we use the `set` action to set the output value of the `path` function.
+On the query side, we use `=` to bind the output value of a function.
 
 ```egglog
 (rule ((= (edge x y) len))
       ((set (path x y) len)))
-(rule ((= (path x y) xy) 
+(rule ((= (path x y) xy)
        (= (edge y z) yz))
       ((set (path x z) (+ xy yz))))
 ```
 
 ```elixir
-step_12 = """
-(rule ((= (edge x y) len))
-      ((set (path x y) len)))
-(rule ((= (path x y) xy) 
-       (= (edge y z) yz))
-      ((set (path x z) (+ xy yz))))
-"""
-
-phase_12 = phase_11 <> "\n" <> step_12
-result = Egglog.Program.with_program(phase_11, fn program ->
-  Egglog.Program.run!(program, step_12)
-end)
-Egglog.Output.print(result)
+step_13 =
+  next.(step_12, """
+  (rule ((= (edge x y) len))
+        ((set (path x y) len)))
+  (rule ((= (path x y) xy)
+         (= (edge y z) yz))
+        ((set (path x z) (+ xy yz))))
+  """)
 ```
 
 Let's run our rules and check we get the desired shortest path.
@@ -412,59 +333,36 @@ Let's run our rules and check we get the desired shortest path.
 ```egglog
 (run-schedule (saturate (run)))
 (check (= (path 1 3) 20))
-(print-function path 20)
-```
 
-```elixir
-step_13 = """
-(run-schedule (saturate (run)))
-(check (= (path 1 3) 20))
-(print-function path 20)
-"""
-
-phase_13 = phase_12 <> "\n" <> step_13
-result = Egglog.Program.with_program(phase_12, fn program ->
-  Egglog.Program.run!(program, step_13)
-end)
-Egglog.Output.print(result)
-```
-
-Here the interesting thing is not just reachability but the `:merge (min old new)` behavior: the direct path `1 -> 3` has cost `30`, while the derived path through `2` has cost `20`. The serialized graph lets us inspect the function rows that survived merging.
-
-```elixir
-Egglog.Program.with_program(phase_13, fn program ->
-  Egglog.Program.snapshot!(program, "", render: :json)
-end)
-|> Egglog.Snapshot.summary()
-```
-
-```elixir
-Egglog.Program.with_program(phase_13, fn program ->
-  Egglog.Program.snapshot!(program, "", render: :auto)
-end)
-|> render_snapshot.()
-```
-
-```egglog
 (pop)
 (push)
 ```
 
 ```elixir
-step_14 = """
-(pop)
-(push)
-"""
+step_14 =
+  next.(step_13, """
+  (run-schedule (saturate (run)))
+  (check (= (path 1 3) 20))
+  (print-function path 20)
+  """)
+```
 
-phase_14 = phase_13 <> "\n" <> step_14
-result = Egglog.Program.with_program(phase_13, fn program ->
-  Egglog.Program.run!(program, step_14)
-end)
-Egglog.Output.print(result)
+```elixir
+step_15 =
+  next.(step_14, """
+  (pop)
+  """)
+```
+
+```elixir
+step_16 =
+  next.(step_15, """
+  (push)
+  """)
 ```
 
 Now let us combine the knowledge we have learned in lessons 1 and 2 to write a program that combines
- both equality saturation and Datalog.
+both equality saturation and Datalog.
 
 We reuse our path example, but this time the nodes are terms constructed using the `mk` constructor,
 
@@ -475,15 +373,10 @@ We start by defining a new, union-able sort.
 ```
 
 ```elixir
-step_15 = """
-(sort Node)
-"""
-
-phase_15 = phase_14 <> "\n" <> step_15
-result = Egglog.Program.with_program(phase_14, fn program ->
-  Egglog.Program.run!(program, step_15)
-end)
-Egglog.Output.print(result)
+step_17 =
+  next.(step_16, """
+  (sort Node)
+  """)
 ```
 
 We can then define a new constructor for our sort.
@@ -493,25 +386,20 @@ We can then define a new constructor for our sort.
 ```
 
 ```elixir
-step_16 = """
-(constructor mk (i64) Node)
-"""
-
-phase_16 = phase_15 <> "\n" <> step_16
-result = Egglog.Program.with_program(phase_15, fn program ->
-  Egglog.Program.run!(program, step_16)
-end)
-Egglog.Output.print(result)
+step_18 =
+  next.(step_17, """
+  (constructor mk (i64) Node)
+  """)
 ```
 
 Note: We could have equivalently written
 
 ```
- (datatype Node
-     (mk i64))
+(datatype Node
+    (mk i64))
 ```
 
-`datatype` is syntax sugar for `sort`s and `constructor`s.
+`datatype` is a syntactic sugar for `sort`s and `constructor`s.
 
 ```egglog
 (relation edge (Node Node))
@@ -529,54 +417,44 @@ Note: We could have equivalently written
 ```
 
 ```elixir
-step_17 = """
-(relation edge (Node Node))
-(relation path (Node Node))
+step_19 =
+  next.(step_18, """
+  (relation edge (Node Node))
+  (relation path (Node Node))
 
-(rule ((edge x y))
-      ((path x y)))
-(rule ((path x y) (edge y z))
-      ((path x z)))
+  (rule ((edge x y))
+        ((path x y)))
+  (rule ((path x y) (edge y z))
+        ((path x z)))
 
-(edge (mk 1) (mk 2))
-(edge (mk 2) (mk 3))
-(edge (mk 3) (mk 1))
-(edge (mk 5) (mk 6))
-"""
-
-phase_17 = phase_16 <> "\n" <> step_17
-result = Egglog.Program.with_program(phase_16, fn program ->
-  Egglog.Program.run!(program, step_17)
-end)
-Egglog.Output.print(result)
+  (edge (mk 1) (mk 2))
+  (edge (mk 2) (mk 3))
+  (edge (mk 3) (mk 1))
+  (edge (mk 5) (mk 6))
+  """)
 ```
 
 Because we defined our nodes using a `sort`, we can "union" two nodes.
- This makes them indistinguishable to rules in `egglog`.
+This makes them indistinguishable to rules in `egglog`.
 
 ```egglog
 (union (mk 3) (mk 5))
 ```
 
 ```elixir
-step_18 = """
-(union (mk 3) (mk 5))
-"""
-
-phase_18 = phase_17 <> "\n" <> step_18
-result = Egglog.Program.with_program(phase_17, fn program ->
-  Egglog.Program.run!(program, step_18)
-end)
-Egglog.Output.print(result)
+step_20 =
+  next.(step_19, """
+  (union (mk 3) (mk 5))
+  """)
 ```
 
 `union` is a new keyword here, but it is our old friend: `rewrite`s are implemented as rules whose
- actions are `union`s. For instance, `(rewrite (Add x y) (Add y x))` is lowered to the following
- rule:
+actions are `union`s. For instance, `(rewrite (Add a b) (Add b a))` is lowered to the following
+rule:
 
 ```
- (rule ((= e (Add x y)))
-       ((union e (Add y x))))
+(rule ((= e (Add x y)))
+      ((union e (Add y x))))
 ```
 
 ```egglog
@@ -584,43 +462,18 @@ Egglog.Output.print(result)
 
 (check (edge (mk 3) (mk 6)))
 (check (path (mk 1) (mk 6)))
-(print-function edge 20)
-(print-function path 20)
 ```
 
 ```elixir
-step_19 = """
-(run-schedule (saturate (run)))
+step_21 =
+  next.(step_20, """
+  (run-schedule (saturate (run)))
 
-(check (edge (mk 3) (mk 6)))
-(check (path (mk 1) (mk 6)))
-(print-function edge 20)
-(print-function path 20)
-"""
-
-phase_19 = phase_18 <> "\n" <> step_19
-result = Egglog.Program.with_program(phase_18, fn program ->
-  Egglog.Program.run!(program, step_19)
-end)
-Egglog.Output.print(result)
-```
-
-This is the first example where congruence closure and Datalog-style reachability interact directly: after `(mk 3)` and `(mk 5)` are unioned, paths through one representative can satisfy queries through the other.
-
-In universal-algebra terms, the `mk` terms live in a quotient. The `edge` and `path` relations are interpreted over representatives of that quotient, so equal nodes share relational consequences.
-
-```elixir
-Egglog.Program.with_program(phase_19, fn program ->
-  Egglog.Program.snapshot!(program, "", render: :json)
-end)
-|> Egglog.Snapshot.summary()
-```
-
-```elixir
-Egglog.Program.with_program(phase_19, fn program ->
-  Egglog.Program.snapshot!(program, "", render: :auto)
-end)
-|> render_snapshot.()
+  (check (edge (mk 3) (mk 6)))
+  (check (path (mk 1) (mk 6)))
+  (print-function edge 20)
+  (print-function path 20)
+  """)
 ```
 
 We can also give a new meaning to equivalence by adding the following rule.
@@ -632,105 +485,94 @@ We can also give a new meaning to equivalence by adding the following rule.
 ```
 
 ```elixir
-step_20 = """
-(rule ((path x y)
-       (path y x))
-      ((union x y)))
-"""
-
-phase_20 = phase_19 <> "\n" <> step_20
-result = Egglog.Program.with_program(phase_19, fn program ->
-  Egglog.Program.run!(program, step_20)
-end)
-Egglog.Output.print(result)
+step_22 =
+  next.(step_21, """
+  (rule ((path x y)
+         (path y x))
+        ((union x y)))
+  """)
 ```
 
-This rule says that if there is a path from `x` to `y` and from `y` to `x`, then 
- `x` and `y` are equivalent.
- This rule allows us to tell if `a` and `b` are in the same connected component by checking
- `(check (= (mk a) (mk b)))`.
+This rule says that if there is a path from `x` to `y` and from `y` to `x`, then
+`x` and `y` are equivalent.
+This rule allows us to tell if `a` and `b` are in the same connected component by checking
+`(check (= (mk a) (mk b)))`.
 
 ```egglog
 (run-schedule (saturate (run)))
 (check (= (mk 1) (mk 2))
        (= (mk 1) (mk 3))
        (= (mk 2) (mk 3)))
-(print-function path 20)
 ```
 
 ```elixir
-step_21 = """
-(run-schedule (saturate (run)))
-(check (= (mk 1) (mk 2))
-       (= (mk 1) (mk 3))
-       (= (mk 2) (mk 3)))
-(print-function path 20)
-"""
-
-phase_21 = phase_20 <> "\n" <> step_21
-result = Egglog.Program.with_program(phase_20, fn program ->
-  Egglog.Program.run!(program, step_21)
-end)
-Egglog.Output.print(result)
+step_23 =
+  next.(step_22, """
+  (run-schedule (saturate (run)))
+  (check (= (mk 1) (mk 2))
+         (= (mk 1) (mk 3))
+         (= (mk 2) (mk 3)))
+  (print-function path 20)
+  """)
 ```
 
 **Exercises:**
 
 **(Parametrized rewrite rule)**
- In lesson 1, it is tedious to write associativity and commutativity (AC) rules for
- every AC operator (e.g., Add, Mul, ...). One way to save us from this repetitive work
- is to parameterize over the operators.
+In our lesson 1, it is tedious to write associativity and commutativity (AC) rules for
+every AC operators (e.g., Add, Mul, ...). One way to save us from this repetitive work
+is to parameterize over the operators.
 
 In the following program, instead of `Mul` and `Add`, `Expr` has a `Bop` operator
- that takes an operator kind and two operands.
+that takes an operator kind and two operands.
 
 ```
- (datatype BopKind (Add) (Mul) (Div))
- (datatype Expr (Num i64) (Var String) (Bop BopKind Expr Expr))
+(datatype BopKind (Add) (Mul) (Div))
+(datatype Expr (Num i64) (Var String) (Bop BopKind Expr Expr))
 ```
 
 First, add a relation `AcBopKind` that holds `BopKind`s which are associative and commutative.
- Second, insert the appropriate `BopKind`s into that relation.
- Third, add a single rule that implements commutativity for all `Bop`s with an `AcBopKind`.
- Finally, add a single rule that implements associativity for all `Bop`s with an `AcBopKind`.
+Second, insert the appropriate `BopKind`s into that relation.
+Third, add a single rule that implements commutativity for all `Bop`s with an `ACBopKind`.
+Finally, add a single rule that implements associativity for all `Bop`s with an `ACBopKind`.
 
-**(Universe relation)** 
- One of the rewrite rules that we cannot make a `birewrite` in lesson 1 is the rule
- `(rewrite (Add x (Num 0)) x)`. This is because it is not clear what `x` is bound to 
- in the inverse rule, `(rewrite x (Add x (Num 0)))`. Therefore, defining this rule in egglog
- causes an error. One way to fix this is to introduce a "universe" relation, which contains
- every term in the e-graph. So we can write our rules as follows:
+**(Universe relation)**
+One of the rewrite rules that we cannot make a `birewrite` in lesson 1 is the rule
+`(rewrite (Add x (Num 0)) x)`. This is because it is not clear what `x` is bound to
+in the inverse rule, `(rewrite x (Add x (Num 0)))`. Therefore, defining this rule in egglog
+causes an error. One way to fix this is to introduce a "universe" relation, which contains
+every term in the e-graph. So we can write our rules as follows:
 
 ```
- (rule ((universe x))
-       ((union x (Add x (Num 0)))))
+(rule ((universe x))
+      ((union x (Add x (Num 0)))))
 ```
 
 Please define such a `universe` relation so that the above rule works.
 
-Side Note: The above rule can also be written using the shorthand `rewrite` with a `:when` 
- condition: `(rewrite x (Add x (Num 0)) :when ((universe x)))`, and similarly the birewrite
- rule `(birewrite (Add x (Num 0)) x :when ((universe x)))`, which introduces a bit of 
- overhead for the forward direction, but is more concise.
+Side Note: The above rule can also be written using the shorthand `rewrite` with a `:when`
+condition: `(rewrite x (Add x (Num 0)) :when ((universe x)))`, and similarly the birewrite
+rule `(birewrite (Add x (Num 0)) x :when ((universe x)))`, which introduces a bit of
+overhead for the forward direction, but is more concise.
 
 ---
 
 **Everything is a function**
 
 We have talked about relations being a special case of functions, but in fact, `constructor`s like `Add` and `Mul`
- are also function tables under the hood!
- For instance, the `Add` constructor
+are also function tables under the hood!
+For instance, the `Add` constructor
 
 ```
- (constructor Add (Expr Expr) Expr)
+(constructor Add (Expr Expr) Expr)
 ```
 
 is a function with two `Expr` inputs and one `Expr` output. Its merge expression is simply to union the two output values.
- This corresponds to functional dependency: If `x1 = x2`, and `y1 = y2`, then it follows that
- `(Add x1 y1)` and `(Add x2 y2)` are equivalent.
- In other words, functions, functional dependencies, and merge expressions are the fundamental unifying concepts in our framework.
- This allows egglog to be implemented as a database system using advanced database techniques.
+This corresponds to functional dependency: If `x1 = x2`, and `y1 =y2`, then it follows that
+`(Add x1 y1)` and `(Add x2 y2)` are equivalent.
+In other words, functions, functional dependencies, and merge expressions are the fundamental unifying concepts in our framework.
+This allows us to implement egglog as a database system and using advanced database techniques.
 
-There is one last caveat about constructors though: Different from `function` but similar to `relation`, constructors have default values, so expressions
- like `(let e1 (Num 2))` succeeds even when `(Num 2)` is not already in the e-graph, in which case it creates a new id for the output.
- In contrast, since relations are functions with output domain `Unit`, their default value is the only value of type `Unit`.
+There is one last caveat about constructors though: Different from `function` but similar to `relation`, constructor have default values, so expressions
+like `(let e1 (Num 2))` succeeds even when `(Num 2)` is not already in the e-graph, in which case it creates a new id for the output.
+In contrast, since `relation` are functions with output domain `Unit`, its default value is the only value of type `Unit`.

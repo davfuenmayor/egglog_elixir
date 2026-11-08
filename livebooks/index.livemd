@@ -1,0 +1,33 @@
+# Index
+
+## Start here
+
+[Getting Started](getting_started.livemd) introduces the library's two execution
+models, EGraph and Program, using the same arithmetic example. It also covers
+push/pop, typed queries, native errors and automatic graph rendering.
+
+## Egglog tutorial
+
+Follow these chapters in order to learn the egglog language. Their text follows
+the [upstream tutorial](https://egraphs-good.github.io/egglog-tutorial/).
+
+| Notebook                                                                          | Subject                                                            |
+| --------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
+| [01 — Equality Saturation](egglog-tutorial/01-basics.livemd)                    | Expressions, rewrite rules, extraction and equivalence             |
+| [02 — Datalog](egglog-tutorial/02-datalog.livemd)                               | Relations, shortest paths, merge expressions and equality          |
+| [03 — E-class Analysis](egglog-tutorial/03-analysis.livemd)                     | Bounds, guarded rewrites and free variables                        |
+| [04 — Scheduling](egglog-tutorial/04-scheduling.livemd)                         | Rulesets, iteration and saturation                                 |
+| [05 — Extraction and Cost](egglog-tutorial/05-cost-model-and-extraction.livemd) | Extraction, costs and matrix illustrations                         |
+| [06 — LA compiler](egglog-tutorial/06-case-study.livemd)                        | Compiler graph illustrations and upstream Rust extension exercises |
+
+## More notebooks
+
+Additional topic notebooks will be listed here as the collection grows.
+
+## Reference
+
+The [shared Livebook guide](https://github.com/davfuenmayor/egglog_elixir/blob/main/livebooks/README.md)
+collects installation, execution details, rendering options and the boundaries of
+experimental and Rust-only tutorial material.
+
+This index contains no executable cells. Open a linked notebook to begin.
