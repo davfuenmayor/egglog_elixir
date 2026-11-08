@@ -1,48 +1,80 @@
 defmodule Egglog.LivebooksTest do
   use ExUnit.Case, async: true
   @root Path.expand("../livebooks", __DIR__)
-  @fence String.duplicate(<<96>>, 3)
 
-  test "executable notebooks install this checkout; reference-only chapter has no runtime" do
+  test "executable notebooks install this checkout; index lists every notebook" do
     notebooks = Path.wildcard(Path.join(@root, "**/*.livemd"))
-    assert notebooks != []
+    assert length(notebooks) == 8
 
-    for path <- notebooks do
+    index_path = Path.join(@root, "index.livemd")
+    index = File.read!(index_path)
+    refute index =~ "```elixir"
+
+    for path <- notebooks -- [index_path] do
+      assert index =~ "(" <> Path.relative_to(path, @root) <> ")"
+    end
+
+    for path <- notebooks -- [index_path] do
       text = File.read!(path)
 
-      if Path.basename(path) == "06-case-study.livemd" do
-        assert text =~ "**Status: reference only.**"
-        refute text =~ @fence <> "elixir"
-        refute text =~ "Mix.install"
-      else
-        assert [[relative]] =
-                 Regex.scan(
-                   ~r/\{:egglog_elixir, path: Path\.expand\("([^"]+)", __DIR__\)\}/,
-                   text, capture: :all_but_first)
+      assert [[relative]] =
+               Regex.scan(
+                 ~r/\{:egglog_elixir, path: Path\.expand\("([^"]+)", __DIR__\)\}/,
+                 text,
+                 capture: :all_but_first
+               )
 
-        assert Path.expand(relative, Path.dirname(path)) == Path.dirname(@root)
-        assert text =~ "{:kino,"
-        refute String.replace(text, @fence, "~~~") =~ ~r/^~~~(?:python|rust)\s*$/m
+      assert Path.expand(relative, Path.dirname(path)) == Path.dirname(@root)
+      assert text =~ "{:kino,"
+      refute text =~ "Egglog.Snapshot.summary"
+
+      for [code] <- Regex.scan(~r/^```elixir\n(.*?)^```/ms, text, capture: :all_but_first) do
+        refute code =~ "render: :json"
+      end
+
+      if Path.basename(path) == "getting_started.livemd" do
+        assert text =~ "Egglog.EGraph.with_egraph(math_theory"
+        assert text =~ "Egglog.Program.with_program(math_theory"
+      else
+        assert text =~ "Egglog.Program.Step.next"
+        assert text =~ "defimpl Kino.Render, for: Egglog.Program.Step"
+      end
+
+      assert text =~ "render: :auto"
+      assert text =~ "consolidate_protocols: false"
+
+      for [code] <- Regex.scan(~r/^```elixir\n(.*?)^```/ms, text, capture: :all_but_first),
+          String.contains?(code, "next.(step_") do
+        refute code =~ "snapshot_"
+        refute code =~ "phase_"
+        refute code =~ "Program.with_program"
       end
     end
   end
 
-  test "Getting Started demonstrates queries, explicit state, rollback and closed handles" do
-    text = File.read!(Path.join(@root, "getting_started.livemd"))
+  test "tutorial technicalities stay in the guide and library hub" do
+    guide = File.read!(Path.join(@root, "README.md"))
 
-    for call <- [
+    for term <- [
           "Egglog.Program.query!",
-          "Egglog.Program.with_program",
           "Egglog.EGraph.with_egraph",
           "Egglog.EGraph.clear_function",
           "Egglog.EGraph.push",
           "Egglog.EGraph.pop",
-          "{:error, {:closed, _}}"
+          "{:error, {:closed, message}}",
+          "Rust",
+          "dynamic-cost",
+          "MIT license"
         ] do
-      assert text =~ call
+      assert guide =~ term
     end
 
-    refute text =~ "Enum.each([math, cc, reach, guarded]"
+    for path <- Path.wildcard(Path.join(@root, "egglog-tutorial/*.livemd")) do
+      text = File.read!(path)
+      refute text =~ "EGGLOG_GRAPHVIZ_DOT"
+      refute text =~ "Execution contract"
+      refute text =~ "Source baseline, not a native handle"
+    end
   end
 
   test "display helpers never synthesize native check outcomes" do
@@ -55,10 +87,10 @@ defmodule Egglog.LivebooksTest do
   end
 
   test "chapter experiments retain explicit sources instead of native handles across cells" do
-    for path <- Path.wildcard(Path.join(@root, "egglog-tutorial/0[1-5]-*.livemd")) do
+    for path <- Path.wildcard(Path.join(@root, "egglog-tutorial/0[1-6]-*.livemd")) do
       text = File.read!(path)
-      assert text =~ "phase_00"
-      assert text =~ "Egglog.Program.with_program"
+      assert text =~ "step_00"
+      assert text =~ "Egglog.Program.Step.new()"
       refute text =~ "Egglog.EGraph.new"
       refute text =~ "Egglog.EGraph.run(egraph"
     end

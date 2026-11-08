@@ -51,7 +51,20 @@ defmodule EgglogLivebookCheck do
         try do
           Livebook.Session.queue_full_evaluation(session.pid, [])
           await(session.pid, System.monotonic_time(:millisecond) + 600_000)
-          IO.puts("PASS #{name}: #{length(cells)} cells")
+          data = Livebook.Session.get_data(session.pid)
+          step_cells = for section <- data.notebook.sections,
+                            %{source: source, outputs: outputs} <- section.cells,
+                            String.contains?(source, "next.(step_") or
+                              String.contains?(source, "with_egraph(math_theory") or
+                              String.contains?(source, "with_program(math_theory"), do: outputs
+          true = step_cells != []
+          true = Enum.all?(step_cells, fn outputs ->
+            Enum.any?(outputs, fn
+              {_, %{type: :grid, outputs: children}} -> children != []
+              _ -> false
+            end)
+          end)
+          IO.puts("PASS #{name}: #{length(cells)} cells; #{length(step_cells)} step graph displays")
           {name, {:passed, length(cells)}}
         after
           Livebook.Session.close(session.pid)

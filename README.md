@@ -1,5 +1,7 @@
 # EgglogElixir
 
+[![Run in Livebook](https://livebook.dev/badge/v1/blue.svg)](https://livebook.dev/run?url=https%3A%2F%2Fgithub.com%2Fdavfuenmayor%2Fegglog_elixir%2Fblob%2Fmain%2Flivebooks%2Findex.livemd)
+
 Thin Elixir wrapper around the native Rust `egglog` engine.
 
 The wrapper is intentionally small. Elixir does not implement congruence
@@ -65,15 +67,22 @@ For debugging and teaching examples, use `Egglog.snapshot/3` or
 `Egglog.EGraph.snapshot/2` for the current mutable session.
 
 Snapshots ask native egglog to serialize the e-graph. The wrapper can return
-DOT, SVG, JSON, or Mermaid:
+DOT, SVG, JSON, or Mermaid. The two graphical rendering paths are:
+
+* **SVG:** native egglog DOT output → Graphviz `dot` → SVG.
+* **Mermaid:** native egglog JSON output → the wrapper's JSON-to-Mermaid converter
+  → Mermaid source, which Kino or another Mermaid frontend renders.
+
+Mermaid is generated directly from JSON; the converter does not parse DOT.
+The `render` option selects the output:
 
 * `render: :auto` (the default) returns Graphviz SVG when a dot executable is
   detected; otherwise it converts native JSON to Mermaid. If a detected renderer
   fails or times out, it retains native DOT.
 * `render: :dot` returns DOT.
-* `render: :svg` requires SVG rendering.
+* `render: :svg` requires Graphviz to render native DOT as SVG.
 * `render: :json` returns egglog's JSON serialization.
-* render: :mermaid converts native JSON into Mermaid source, without Graphviz.
+* `render: :mermaid` converts native JSON into Mermaid source, without Graphviz.
 
 `Egglog.Snapshot.summary/1` provides small JSON snapshot summaries for notebooks
 and tests. The wrapper itself has no Livebook or Kino dependency.
@@ -154,9 +163,30 @@ original strings remain unchanged in the native JSON.
 
 Large sources may exceed the frontend's text/edge limits or be unreadable.
 The exporter does not silently truncate. Use snapshot_max_functions /
-snapshot_max_calls_per_function and display snapshot.omitted. The Analysis
-Livebook demonstrates a capped view alongside uncapped JSON summaries.
+snapshot_max_calls_per_function and display snapshot.omitted. The Livebooks
+show capped graph views with explicit omission notices.
 A Kino object alone does not prove browser-side rendering succeeded.
+
+## Replayable program steps
+
+`Egglog.Program.Step` packages accumulated source and the current snapshot as
+ordinary data, without retaining native handles or depending on Kino. A `Step`
+names a point in execution history; `new/0` creates step zero and `next/3`
+constructs a following step without changing its predecessor:
+
+```elixir
+initial = Egglog.Program.Step.new("(relation edge (i64 i64))")
+first = Egglog.Program.Step.next(initial, "(edge 1 2)", render: :auto)
+second = Egglog.Program.Step.next(first, "(edge 2 3)", render: :auto)
+```
+
+Each step reconstructs its predecessor in a scoped Program and captures the new
+code's output and graph. Previous steps remain unchanged, so steps can be
+repeated or branched. Errors raise, and scoped handles close on success or failure.
+The Livebooks bind this operation as `next.(previous, code)` and supply a local
+`Kino.Render` implementation to display output and graphs automatically. See the
+[shared guide](livebooks/README.md#execution-and-revisiting-cells) for setup and
+replay costs. SVG is rendered from native DOT; Mermaid is converted from native JSON.
 
 ## Concurrency
 
@@ -171,24 +201,16 @@ There is no process-wide NIF mutex and no Elixir worker pool.
 
 ## Livebooks
 
-The library includes Livebook examples as its primary onboarding material.
-Read [installation, execution contracts and limits](livebooks/README.md) first.
-Independent experiments use scoped Program phases; Getting Started also has
-an explicit sequential EGraph accumulation/rollback lesson. Chapter 06 is a
-reference-only Rust guide with no executable setup.
+Start at the [notebook index](livebooks/index.livemd) for the full collection.
+[Getting Started](livebooks/getting_started.livemd) compares EGraph and Program
+using the same arithmetic example, then illustrates queries, native errors and
+automatic graph rendering. The index has no runtime or dependencies.
 
-Start here:
-
-* [`livebooks/getting_started.livemd`](livebooks/getting_started.livemd)
-
-That notebook gives a compact overview of:
-
-* equality saturation and extraction
-* snapshots and visualization
-* congruence closure
-* Datalog-style facts
-* analysis facts as guards
-* `Egglog.Program` vs `Egglog.EGraph`
+Getting Started uses this checkout locally; a standalone import installs GitHub
+`main`. The badge opens the published index, so local changes must be published
+before they appear through it. The [shared guide](livebooks/README.md) collects
+installation and execution details. The six tutorial chapters retain upstream
+prose and order, with automatic Graphviz/Mermaid views throughout.
 
 Then continue with the chapter-by-chapter upstream tutorial adaptations:
 
@@ -196,8 +218,9 @@ Then continue with the chapter-by-chapter upstream tutorial adaptations:
 
 Those tutorial clones execute the ordinary egglog-language material through the
 thin wrapper. Upstream sections that depend on experimental scheduler commands,
-dynamic cost models, or Rust-library extension hooks are marked in the notebooks
-as reference material instead of being reimplemented in Elixir.
+dynamic cost models, or Rust-library extension hooks retain their upstream text.
+The shared guide explains these boundaries; native graph illustrations accompany
+the matrix and compiler examples.
 
 ## Installation and platforms
 
@@ -220,14 +243,14 @@ run through native egglog, and the default Standalone Livebook runtime works.
 ```sh
 mix deps.get
 mix test
-mix escript.install hex livebook 0.19.9 --force
-~/.mix/escripts/livebook server livebooks/getting_started.livemd
+mix escript.install hex livebook 0.19.10 --force
+~/.mix/escripts/livebook server livebooks/index.livemd
 ```
 
 On Windows, launch Livebook from PowerShell:
 
 ```powershell
-& "$HOME\.mix\escripts\livebook.bat" server livebooks/getting_started.livemd
+& "$HOME\.mix\escripts\livebook.bat" server livebooks/index.livemd
 ```
 
 Open the printed local URL, keep the checkout in its original layout, and choose
@@ -286,7 +309,7 @@ The checker uses real Livebook sessions and disposable notebook copies.
 Install the pinned Livebook version and start an isolated local server:
 
 ```sh
-mix escript.install hex livebook 0.19.9 --force
+mix escript.install hex livebook 0.19.10 --force
 epmd -daemon
 LIVEBOOK_IFRAME_PORT=8192 ~/.mix/escripts/livebook server --ip 127.0.0.1 --port 8191 \
   --name egglog_livebooks@127.0.0.1 --cookie YOUR_LOCAL_COOKIE
@@ -300,10 +323,11 @@ elixir --name egglog_checker@127.0.0.1 --cookie YOUR_LOCAL_COOKIE \
 ```
 
 This evaluates every notebook under `livebooks/`, including Getting Started,
-using Livebook's parser, runtime, actual `Mix.install` cells and Kino.
-The reference-only compiler chapter has no code cells. The cell checker also
-reruns each executable cell consecutively and revisits early phases after later
-ones; it checks theory-edit/reload behavior as well as full notebook passes. Graphviz
+using Livebook's parser, runtime, actual `Mix.install` cells and Kino. The index
+imports as navigation-only Markdown.
+The compiler chapter includes native schema/expression/rewrite illustrations.
+The cell checker also reruns each executable cell consecutively and revisits
+early steps after later ones; it checks theory-edit/reload behavior as well as full notebook passes. Graphviz
 is needed only for optional SVG rendering. Import warnings and evaluation errors
 fail the check. Markdown-only examples stay Markdown; executable cells must be
 Elixir. Each session evaluates a disposable notebook copy, so autosaves cannot
@@ -373,7 +397,7 @@ EGGLOG_REQUIRE_DOT_PARITY=1 EGGLOG_MERMAID_SCREENSHOTS="$PWD/tmp/livebook-parity
 
 Rust, Graphviz and Playwright/Chromium are dev-only requirements for this check.
 Set NODE_PATH if Playwright is installed outside the checkout. sources.ndjson
-records which notebooks produced each captured graph. The reference-only Rust
-chapter has no executable views. The exporter restores non-finite JSON costs
-(null) to a finite placeholder solely for deserialization; DOT ignores costs.
+records which notebooks produced each captured graph, including the native
+illustrations accompanying the Rust compiler chapter. The exporter restores
+non-finite JSON costs (null) to a finite placeholder solely for deserialization; DOT ignores costs.
 For a small independent corpus, run `elixir scripts/export_graph_parity.exs`.

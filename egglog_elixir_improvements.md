@@ -5,14 +5,13 @@ structured parse errors, and Graphviz/Mermaid comparison tooling. They are propo
 not claims that these APIs already exist. Priorities favor inspectable native data,
 explicit lifecycle semantics, and reproducible results.
 
-## Current strengths to preserve
+Review: 2026-11-08, against the current working tree (including the Step helper,
+index/application-guide split, and simplified Mermaid renderer). This is a code
+and recorded-validation review, not a new upstream, release or platform audit.
+Current limitations are tracked in [KNOWN_ISSUES.md](KNOWN_ISSUES.md).
 
-- Program queries clone a loaded base; scoped helpers make independent experiments
-  safe to rerun. EGraph deliberately accumulates mutation and supports push/pop.
-  This distinction works; it does not need an implicit reset/replay mechanism.
-- Parse errors already carry structured native source spans. Mermaid already comes
-  from JSON, and automatic rendering already discovers Graphviz or selects Mermaid.
-- Displaying retained results need not execute egglog again. Keep this separation.
+Only outstanding proposals are listed below. Existing dev tools are mentioned
+only where they can support implementation of an open proposal.
 
 ## P1: Export multiple views from one native serialization
 
@@ -20,6 +19,10 @@ explicit lifecycle semantics, and reproducible results.
 to renderer discovery. Comparing both requires either another serialization or a
 dev-only Rust oracle. An agent should not need to reconstruct an experiment merely
 to inspect a different format.
+
+`native/egglog_nif/src/snapshot.rs` exports only one selected format per snapshot.
+The public paired-export API is missing. Reuse `scripts/native_graphviz` as a
+reference for deriving native DOT from retained JSON.
 
 **Proposal:** Allow paired native JSON/DOT exports from one serialized object, then
 convert/render those retained representations. Include native revision and serializer
@@ -34,8 +37,9 @@ failures preserve the other representations and the original execution result.
 
 **Problem observed:** Automatic rendering can succeed as a wrapper call while a
 Graphviz failure produces raw DOT. The reason is then unavailable to the caller.
-An agent cannot distinguish an unavailable renderer from a crashed or timed-out one
-merely by inspecting a successful result's format.
+The selected format identifies the path taken, but does not explain a renderer
+failure or why a discovery override was skipped. Automatic DOT fallback discards
+the renderer error in `lib/egglog/common.ex`.
 
 **Proposal:** Include a rendering report, separate from the native run report:
 requested/selected format, resolved executable, discovery source, elapsed layout
@@ -51,6 +55,10 @@ renderer works. Reading this report triggers no native run or capability probe.
 **Problem observed:** Switching an experiment from Mermaid to SVG leaves previous
 .mmd/.json files beside new .dot/.svg files. A directory scan can pair old files
 with a current result, even though the notebook itself correctly uses saved data.
+
+Public artifact writes in `lib/egglog/common.ex` use direct `File.write`, without
+a manifest or atomic group commit. Unavailable format-specific artifacts yield nil paths;
+these should be reported explicitly rather than inferred from neighboring files.
 
 **Proposal:** Return/write a per-export manifest listing only files produced by
 that call, content hashes, source snapshot hash, native version, selected renderer,
@@ -68,6 +76,10 @@ and execution errors still share :native_error plus human-readable text. Generat
 request prefixes also make a native source offset different from an input-field
 offset. Mutable command batches may retain earlier successful changes on error.
 
+Non-parser type and execution details are generally stringified in
+`native/egglog_nif/src/error.rs`. Structured kinds, additional spans and source
+mapping for these diagnostics remain missing.
+
 **Proposal:** Preserve structured native error kinds and available spans for these
 errors, including multiple type diagnostics. Where wrapper-generated source is
 used, optionally return that exact source and a source map to input fields. Expose
@@ -80,6 +92,8 @@ The full native message remains available. Unavailable spans/progress are marked
 unknown rather than inferred. Preserve the Program/EGraph lifecycle contract.
 
 ## P2: Provide a small, versioned capability report
+
+There is no single public, versioned capability report.
 
 **Proposal:** Expose native egglog revision, serializer schema/version, enabled
 features, supported snapshot formats, and resolved renderer availability through a
@@ -97,6 +111,10 @@ layout can differ between independent serializations. Equal node/class counts do
 not prove equal graphs or successful derivation. Within one snapshot, exact child
 references and ordered edges are valuable evidence.
 
+A public cross-snapshot comparison API with explicit identity/mapping semantics
+is missing. Reuse `scripts/check_mermaid_browser.cjs` as a reference for labelled
+graph checks, without treating its within-snapshot parity checks as cross-run matching.
+
 **Proposal:** Offer labelled-graph inspection/comparison helpers with explicit
 modes: exact native identity; comparison under a supplied ID mapping; and comparison
 by stable aliases plus child classes. Report unmatched or ambiguous mappings.
@@ -109,6 +127,9 @@ canonicalization and its limits before implementing it.
 
 ## P2: Expose structured extraction results when supported upstream
 
+Native command outputs in `native/egglog_nif/src/run.rs` and the public extraction
+helpers return extraction text rather than a structured compound term and cost.
+
 **Proposal:** Return native extraction terms/ASTs and costs alongside display text,
 when the upstream API supplies them. Include whether an extraction was truncated.
 
@@ -118,9 +139,10 @@ and native choices; avoid introducing a second egglog parser or simplifier.
 
 ## P2: Consolidate the notebook validation interface
 
-**Problem observed:** The comparison currently combines separate code-only,
-Livebook-runtime, capture, native-DOT and browser tools. Course controls require
-explicit input defaults/overrides, while no-Graphviz checks isolate PATH.
+**Problem observed:** Validation combines separate code-only, Livebook-runtime,
+capture, native-DOT and browser tools. There is no unified runner or JSON report
+covering selection, renderer scenarios, replay and browser output. Input overrides
+also need a consistent interface for notebooks that use controls.
 
 **Proposal:** Add a documented dev runner with notebook selection, renderer scenarios,
 input overrides, captured artifacts, provenance, and a JSON result report. Run
@@ -128,17 +150,16 @@ environment-dependent cases in isolated processes. Keep examples in the notebook
 and read them during validation; do not create competing lesson implementations.
 
 **Acceptance:** The runner records exact notebook inputs, checks both automatic
-renderer branches, revisits earlier phases, and reports browser rendering separately
+renderer branches, revisits earlier steps, and reports browser rendering separately
 from creation of a Kino object. It preserves the explicit difference between fresh
 Program experiments and sequential EGraph operations, and never autosaves over
 an authoritative notebook during validation.
 
-## Additional lesson: distinguish stored edges from visible arrowheads
+## P2: Publish a versioned rendering contract
 
-The boundary correction showed that equality of serialized child IDs does not
-establish Graphviz visual fidelity. DOT lhead clips cross-class edges to class
-boxes; source tail ports also carry argument order. The comparison now checks
-actual rendered arrow-tip coordinates. A useful future render contract should
-expose source constructor, argument index, target class, native representative,
-and clipping policy separately. Publish renderer limitations by version so agents
-do not assume that a parsed configuration option actually changed the output.
+**Proposal:** Expose source constructor, argument index, target class, native
+representative and clipping policy separately. Publish renderer limitations by
+version so agents can distinguish labelled-graph semantics from layout differences.
+
+**Acceptance:** Consumers can tell which endpoints and ordered arguments are
+represented without inferring them from arrow geometry or layout configuration.

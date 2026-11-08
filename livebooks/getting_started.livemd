@@ -1,456 +1,314 @@
-# Getting Started With Egglog Elixir
-
-## Prerequisites
-
-This notebook uses the native Rust engine through egglog_elixir.
-Supported platforms use the bundled, checksum-verified NIF.
-
-Use the supported Elixir/OTP versions and bundled-native installation
-instructions in the library README. Kino displays the automatically selected format.
-Graphviz is optional: automatic views use SVG when available and Mermaid otherwise.
-
-Use the local checkout below. The maintained installation, publication and
-execution guidance is in [the Livebook guide](README.md).
+# Getting Started
 
 ```elixir
-Mix.install([
-  {:egglog_elixir, path: Path.expand("..", __DIR__)},
-  {:kino, "~> 0.19.0"}
-])
-```
+Mix.install(
+  [
+    if File.regular?(Path.expand("../mix.exs", __DIR__)) do
+      {:egglog_elixir, path: Path.expand("..", __DIR__)}
+    else
+      {:egglog_elixir, git: "https://github.com/davfuenmayor/egglog_elixir.git", branch: "main"}
+    end,
+    {:kino, "~> 0.19.0"}
+  ],
+  consolidate_protocols: false
+)
 
-Visual snapshots in this notebook use **render: :auto**. The wrapper renders
-native DOT as Graphviz SVG when dot is available, or native JSON as Mermaid
-otherwise. Set EGGLOG_GRAPHVIZ_DOT (or GRAPHVIZ_DOT) to an executable path,
-including paths with spaces; otherwise dot is discovered on PATH. Invalid
-overrides are ignored. A detected renderer failure/timeout leaves raw DOT.
-The helper below displays the returned format without executing egglog again.
-Both renderers preserve native e-nodes and equality classes, with matching
-metadata labels and type colors. Cross-class arrows terminate at outer boxes;
-internal arrows keep their member endpoint. All classes use standard subgraphs. Mermaid uses numbered
-edges for multi-argument constructors instead of DOT ports; unary zeros are omitted. An argument still
-denotes its child's whole e-class. Layout/routing and class-member ordering can
-differ. Snapshot omission notices apply to either renderer.
+# Builds snapshot views with native output and automatic graph rendering.
+defmodule EgglogLivebook.View do
+  def snapshot(snapshot) do
+    output = Enum.map(Egglog.Output.texts(snapshot.result), &Kino.Text.new/1)
 
-## Execution contract
+    graph =
+      case snapshot do
+        %{format: :mermaid, mermaid: source} -> Kino.Mermaid.new(source)
+        %{format: :svg, svg: svg} -> Kino.HTML.new(svg)
+        %{text: text} -> Kino.Text.new(text)
+      end
 
-This notebook keeps theories and inputs as ordinary immutable values.
-Each independent experiment uses Program.with_program and returns results or
-snapshots, not a handle. Reevaluate a cell twice or return to it after later
-experiments without redeclaring constructors in a shared mutable graph.
-Evaluate definitions before their dependents; after editing a definition,
-reevaluate its dependents. Section 6 intentionally demonstrates sequential
-EGraph mutation inside one scoped cell.
+    notes =
+      if snapshot.omitted in [nil, ""],
+        do: [],
+        else: [Kino.Markdown.new("Partial view: " <> snapshot.omitted)]
 
-## What This Notebook Teaches
+    empty =
+      if snapshot.stats.snapshot_nodes == 0,
+        do: [Kino.Markdown.new("The e-graph is empty.")],
+        else: []
 
-This is a first-pass tour of the wrapper. It keeps the egglog language visible
-and uses Elixir only to load theories, submit problems, print outputs,
-and render snapshots.
-
-The examples are a small "best of" from the first three upstream egglog
-tutorial chapters:
-
-* equality saturation over symbolic arithmetic
-* congruence closure through constructors
-* Datalog-style reachability
-* analysis facts used as guards for rewrites
-* the difference between `Egglog.Program` and `Egglog.EGraph`
-
-The important boundary is:
-
-* egglog does parsing, e-matching, congruence closure, Datalog evaluation,
-  rebuilding, scheduling, and extraction
-* Elixir submits source/input and receives outputs
-* snapshots come from native egglog serialization, not from an Elixir graph
-  reconstruction
-
-## Tiny Helpers
-
-`Egglog.Output.print/2` prints native output, optionally filtered by type.
-`Egglog.Snapshot.summary/1` summarizes native JSON. Successful commands can be
-silent; these helpers do not infer results from the submitted source. The small
-helper displays automatic SVG/Mermaid views through Kino (or raw DOT on renderer failure).
-
-```elixir
-render_snapshot = fn snapshot ->
-  graph = case snapshot do
-    %{format: :mermaid, mermaid: source} -> Kino.Mermaid.new(source)
-    %{format: :svg, svg: svg} -> Kino.HTML.new(svg)
-    %{text: text} -> Kino.Text.new(text)
+    Kino.Layout.grid(output ++ notes ++ empty ++ [graph])
   end
-  if snapshot.omitted in [nil, ""],
-    do: graph,
-    else: Kino.Layout.grid([Kino.Text.new("Partial snapshot: " <> snapshot.omitted), graph])
 end
+
+snapshot_options = [
+  render: :auto,
+  snapshot_max_functions: 12,
+  snapshot_max_calls_per_function: 6,
+  snapshot_inline_leaves: 1
+]
+
+view = fn title, snapshot ->
+  Kino.Layout.grid([
+    Kino.Markdown.new("**" <> title <> "**"),
+    EgglogLivebook.View.snapshot(snapshot)
+  ])
+end
+
+Kino.nothing()
 ```
 
-## 1. A Loaded Program
+## Using EgglogElixir
 
-Use `Egglog.Program` when you have a reusable theory and want each query to be
-isolated from the others.
+[back to index](index.livemd)
 
-The theory below declares a tiny arithmetic language and a few equations. In
-universal-algebra terms, the datatype gives us a finite signature; the rewrite
-rules generate equalities in the quotient term algebra.
+Note on setup cell: loads EgglogElixir and Kino and defines automatic snapshot displays.
+
+This guide shows how to use the library in an application: choose an execution
+model, obtain structured results, handle errors, and close native resources.
+The same arithmetic example makes the two models directly comparable.
+
+In a Mix application, add the wrapper to `mix.exs` with a pinned version or reviewed
+Git revision. `Mix.install` and the graph display helpers above are for this
+notebook; application code needs neither Livebook nor Kino.
+
+## Two execution models
+
+| Model            | How it works                                                                        |
+| ---------------- | ----------------------------------------------------------------------------------- |
+| `Egglog.EGraph`  | Calls mutate the same native e-graph. `push` saves a checkpoint; `pop` restores it. |
+| `Egglog.Program` | Load a base once. Every run uses a fresh native clone, leaving the base unchanged.  |
+
+Use EGraph for incremental exploration, Program for independent experiments.
+Both delegate reasoning to native egglog.
+
+## One example: simplify `(2 × 3) + 0`
+
+Both models use the same declarations, rules, input and schedule. Constant folding
+and adding zero should make `goal` equivalent to `6` after running the rules.
+The initial failing check confirms that declaring the rules alone is insufficient.
 
 ```elixir
 math_theory = """
-(datatype Math
-  (Num i64)
-  (Var String)
-  (Add Math Math)
-  (Mul Math Math))
-
-(rewrite (Add (Num a) (Num b)) (Num (+ a b)))
-(rewrite (Mul (Num a) (Num b)) (Num (* a b)))
-(rewrite (Add (Mul a x) (Mul b x)) (Mul (Add a b) x))
+(datatype Expr (Num i64) (Var String) (Add Expr Expr) (Mul Expr Expr))
 (rewrite (Add x (Num 0)) x)
-(rewrite (Mul x (Num 1)) x)
+(rewrite (Mul (Num a) (Num b))
+         (Num (* a b)))
 """
 
-```
-
-Now submit one query-local term and ask for extraction.
-
-```elixir
-input = %{
-  terms: %{
-    "goal" => "(Add (Mul (Num 3) (Var \"x\")) (Mul (Num 4) (Var \"x\")))"
-  },
-  budget: %{rounds: 5},
-  requests: [%{type: :extract, expr: "goal"}]
-}
-
-result = Egglog.Program.with_program(math_theory, fn program ->
-  Egglog.Program.run!(program, input)
-end)
-
-Egglog.Output.print(result, :extract)
-Map.take(result, [:status, :stats])
-```
-
-The extracted term is the representative chosen by egglog after saturation.
-Elixir did not simplify the expression. Native egglog matched the rewrite
-schemas, added equalities, rebuilt congruence closure, and extracted a cheap
-representative.
-
-## 2. Looking Inside
-
-Most egglog commands are quiet when they succeed. A snapshot lets us inspect
-what native egglog built.
-
-```elixir
-snapshot = Egglog.Program.with_program(math_theory, fn program ->
-  Egglog.Program.snapshot!(program, input, render: :auto)
-end)
-
-%{format: snapshot.format, stats: snapshot.stats, omitted: snapshot.omitted}
-
-```
-
-```elixir
-render_snapshot.(snapshot)
-```
-
-The picture is not a rewrite trace. Equality saturation keeps several
-equivalent syntactic forms in one e-class and postpones the choice of a concrete
-representative until extraction.
-
-## 3. Checks And Congruence Closure
-
-Checks are assertions about the current e-graph. With `Egglog.Program`, we can
-add query-local unions without mutating the loaded base.
-
-```elixir
-congruence_theory = """
-(datatype Term
-  (A)
-  (B)
-  (Wrap Term)
-  (Pair Term Term))
+example_input = """
+(let goal (Add (Mul (Num 2) (Num 3)) (Num 0)))
+(fail (check (= goal (Num 6))))
 """
 
-```
-
-First, without an equality between `A` and `B`, the two context terms are
-distinct.
-
-```elixir
-before_union_input = %{
-  terms: %{
-    "left" => "(Pair (Wrap (A)) (A))",
-    "right" => "(Pair (Wrap (B)) (B))"
-  },
-  requests: [
-    %{type: :extract, expr: "left"},
-    %{type: :extract, expr: "right"}
-  ]
-}
-before_union = Egglog.Program.with_program(congruence_theory, fn program ->
-  Egglog.Program.run!(program, before_union_input)
-end)
-
-Egglog.Output.print(before_union)
-```
-
-Now assert `A = B` for this query. Congruence closure propagates that equality
-through `Wrap` and `Pair`.
-
-```elixir
-after_union_input = %{
-  terms: %{
-    "left" => "(Pair (Wrap (A)) (A))",
-    "right" => "(Pair (Wrap (B)) (B))"
-  },
-  unions: [{"(A)", "(B)"}],
-  budget: %{rounds: 1},
-  requests: [
-    "(check (= left right))",
-    %{type: :extract, expr: "left"}
-  ]
-}
-
-after_union = Egglog.Program.with_program(congruence_theory, fn program ->
-  Egglog.Program.run!(program, after_union_input)
-end)
-
-Egglog.Output.print(after_union, :extract)
-Map.take(after_union, [:status, :stats])
-```
-
-```elixir
-Egglog.Program.with_program(congruence_theory, fn program ->
-  Egglog.Program.snapshot!(program, after_union_input, render: :auto)
-end)
-|> render_snapshot.()
-```
-
-The equality was asserted only at the leaves, but native rebuild maintains the
-congruence invariant: equal children imply equal parent applications.
-
-## 4. Datalog Facts
-
-Egglog is also a Datalog-style engine. In egglog 3.0, relations are
-non-unionable constructors, and rules derive new rows.
-
-This example computes transitive reachability.
-
-```elixir
-reachability_theory = """
-(relation edge (i64 i64))
-(relation path (i64 i64))
-
-(rule ((edge x y))
-      ((path x y)))
-
-(rule ((path x y) (edge y z))
-      ((path x z)))
+simplify = """
+(run 3)
+(check (= goal (Num 6)))
 """
 
+Kino.nothing()
 ```
 
-Submit a small graph as query-local facts.
+## EGraph: change the graph, then roll back
+
+Insert the expression, save a checkpoint, and run the rules. The simplified graph
+contains both the original expression and its equivalent `6`; extraction selects
+a representative without deleting alternatives. Pop restores the unsimplified
+checkpoint, including its earlier equality information.
 
 ```elixir
-reach_input = %{
-  facts: [
-    "(edge 1 2)",
-    "(edge 2 3)",
-    "(edge 3 4)"
-  ],
-  budget: %{rounds: 5},
-  requests: [
-    "(check (path 1 4))",
-    %{type: :print_function, name: "path", limit: 20}
-  ]
-}
-
-reach_result = Egglog.Program.with_program(reachability_theory, fn program ->
-  Egglog.Program.run!(program, reach_input)
-end)
-
-Egglog.Output.print(reach_result, :print_function)
-Map.take(reach_result, [:status, :stats])
-```
-
-The interesting point is that the same native runtime is maintaining both
-relations and equality. We will use that combination in the next example.
-
-## 5. Analysis Facts Guard Rewrites
-
-Many equations are valid only under hypotheses. Instead of writing an Elixir
-callback, keep the hypothesis in egglog as a relation.
-
-Here `(Div x x) = 1` is allowed only when `x` is known to be non-zero.
-
-```elixir
-guarded_theory = """
-(datatype Math
-  (Num i64)
-  (Div Math Math))
-
-(relation non-zero (Math))
-
-(rewrite (Div x x) (Num 1)
-  :when ((non-zero x)))
-"""
-
-```
-
-Without the fact, extraction returns the original division.
-
-```elixir
-without_guard_input = %{
-  terms: %{"x" => "(Div (Num 2) (Num 2))"},
-  budget: %{rounds: 2},
-  requests: [%{type: :extract, expr: "x"}]
-}
-
-without_guard = Egglog.Program.with_program(guarded_theory, fn program ->
-  Egglog.Program.run!(program, without_guard_input)
-end)
-
-Egglog.Output.print(without_guard, :extract)
-```
-
-With the fact, the guarded rewrite fires.
-
-```elixir
-with_guard_input = %{
-  terms: %{"x" => "(Div (Num 2) (Num 2))"},
-  facts: ["(non-zero (Num 2))"],
-  budget: %{rounds: 2},
-  requests: [%{type: :extract, expr: "x"}]
-}
-
-with_guard = Egglog.Program.with_program(guarded_theory, fn program ->
-  Egglog.Program.run!(program, with_guard_input)
-end)
-
-Egglog.Output.print(with_guard, :extract)
-```
-
-```elixir
-Egglog.Program.with_program(guarded_theory, fn program ->
-  Egglog.Program.snapshot!(program, with_guard_input, render: :auto)
-end)
-|> render_snapshot.()
-```
-
-The relation `non-zero` is an analysis fact. Once it is present, egglog can
-justify the equality between the division term and `(Num 1)`.
-
-## 6. Intentional mutable session: execute this cell in order
-
-Program queries isolate experiments. EGraph intentionally accumulates state.
-The following **single scoped cell** demonstrates that behavior: its individual
-calls are sequential; repeating the whole cell creates a fresh session.
-It does not silently reset a shared graph. The snapshot returned at the end is
-ordinary data and remains usable after the native scope closes.
-
-```elixir
-mutable_snapshot = Egglog.EGraph.with_egraph("""
-(datatype Math (Num i64) (Add Math Math))
-(relation seen (i64))
-""", fn graph ->
-  {:ok, _} = Egglog.EGraph.run(graph, "(let x (Add (Num 1) (Num 0)))")
-  {:ok, false} = Egglog.EGraph.check(graph, "(= x (Num 1))")
-  {:ok, _} = Egglog.EGraph.run(graph, "(rewrite (Add a (Num 0)) a)")
-  {:ok, result} = Egglog.EGraph.run(graph, """
-  (run 2)
-  (check (= x (Num 1)))
-  (extract x)
-  """)
-  Egglog.Output.print(result)
-  {:ok, true} = Egglog.EGraph.check(graph, "(= x (Num 1))")
-
+Egglog.EGraph.with_egraph(math_theory, fn graph ->
+  base = Egglog.EGraph.snapshot!(graph, snapshot_options)
+  Egglog.EGraph.run!(graph, example_input)
+  inserted = Egglog.EGraph.snapshot!(graph, snapshot_options)
   :ok = Egglog.EGraph.push(graph)
-  {:ok, _} = Egglog.EGraph.run(graph, "(seen 1)")
-  {:ok, true} = Egglog.EGraph.check(graph, "(seen 1)")
-  :ok = Egglog.EGraph.pop(graph)
-  {:ok, false} = Egglog.EGraph.check(graph, "(seen 1)")
 
-  Egglog.EGraph.snapshot!(graph, render: :auto)
-end)
-render_snapshot.(mutable_snapshot)
-```
+  {simplified, representative} =
+    try do
+      Egglog.EGraph.run!(graph, simplify)
+      snapshot = Egglog.EGraph.snapshot!(graph, snapshot_options)
+      {snapshot, Egglog.EGraph.extract!(graph, "goal")}
+    after
+      :ok = Egglog.EGraph.pop(graph)
+    end
 
-The graph is mutable inside this scope: facts and equalities persist between
-calls, and pop restores the pushed state. with_egraph invokes EGraph.close in
-after, including on failure. To experiment with a long-lived session, follow
-[the explicit sequential-session contract](README.md#execution-contracts).
-For independent comparisons, use Program; no reset API is needed.
+  Egglog.EGraph.run!(graph, "(fail (check (= goal (Num 6))))")
+  restored = Egglog.EGraph.snapshot!(graph, snapshot_options)
 
-## 7. Native Queries And Resource Lifetime
-
-Use `query/5` to receive structured bindings instead of parsing printed rows.
-Variable names and fact syntax remain visible; Rust performs the matching.
-The input and schedule run on a clone, so the loaded theory stays reusable.
-
-```elixir
-Egglog.Program.with_program(reachability_theory, fn program ->
-  destinations =
-    Egglog.Program.query!(program, reach_input, [destination: "i64"], ["(path 1 destination)"])
-    |> Enum.map(& &1["destination"].value)
-    |> Enum.sort()
-
-  %{destinations: destinations, schema: Egglog.Program.function!(program, "path")}
-end, num_threads: 1)
-```
-
-`with_program/3` and `EGraph.with_egraph/3` close their handles in `after`, even
-when the callback raises or throws. Return ordinary results from the callback;
-a returned handle has already been closed. Calls from other processes must
-finish before the scope ends. A mutable graph also closes when its creator exits.
-
-`num_threads: 1` keeps native execution serial; `0` selects available
-parallelism. The setting belongs to each graph and is inherited by program
-clones. Concurrent calls on one program are serialized; independently loaded
-programs can execute concurrently. Waiting calls use an infinite timeout because
-a caller timeout would not cancel work already running in Rust.
-
-For a mutable session, native `clear_function/2` removes rows while preserving
-the declaration. Native `push`/`pop` also apply to that operation.
-
-```elixir
-Egglog.EGraph.with_egraph("(relation visited (i64))\n(visited 1)", fn graph ->
-  :ok = Egglog.EGraph.clear_function(graph, "visited")
-  Egglog.EGraph.query!(graph, [node: "i64"], ["(visited node)"])
+  Kino.Layout.grid([
+    view.("Base: declarations and rules", base),
+    view.("Expression inserted; rules not run", inserted),
+    view.("Rules run inside the checkpoint", simplified),
+    Kino.Markdown.new("Extracted representative: `" <> representative <> "`"),
+    view.("After pop: back to the inserted expression", restored)
+  ])
 end)
 ```
 
-### Closed handles and theory edits
+The calls share state inside the callback. Keeping push/pop together, with pop in
+`after`, makes rollback explicit even on failure. `with_egraph` closes the session
+when the callback ends; rerunning this cell creates a fresh session.
 
-All preceding native scopes close automatically; there is no cleanup cell that
-invalidates earlier examples. Each experiment reloads its displayed theory.
+## Program: repeat the experiment on independent clones
 
-Returning a handle from a scope is deliberately wrong for later use. This cell
-demonstrates the expected error, then reconstructs the experiment correctly:
+Load the same theory. One run inserts the expression; another inserts it and runs
+the rules. A third inserts it again and confirms it is unsimplified: the preceding
+run's equivalences did not carry over. A final empty run shows the unchanged base.
+No push/pop is needed because every run starts from the loaded base.
 
 ```elixir
-closed_program = Egglog.Program.with_program(math_theory, fn program -> program end)
-{:error, {:closed, _}} = Egglog.Program.run(closed_program, input)
+Egglog.Program.with_program(math_theory, fn program ->
+  inserted = Egglog.Program.snapshot!(program, example_input, snapshot_options)
 
-reopened_result = Egglog.Program.with_program(math_theory, fn program ->
-  Egglog.Program.run!(program, input)
+  simplified =
+    Egglog.Program.snapshot!(
+      program,
+      example_input <> simplify <> "(extract goal)",
+      snapshot_options
+    )
+
+  repeated = Egglog.Program.snapshot!(program, example_input, snapshot_options)
+  base = Egglog.Program.snapshot!(program, "", snapshot_options)
+
+  Kino.Layout.grid([
+    view.("Run 1: expression inserted; rules not run", inserted),
+    view.("Run 2: expression inserted and simplified", simplified),
+    view.("Run 3: inserted again; no inherited simplification", repeated),
+    view.("Base: still only declarations and rules", base)
+  ])
 end)
-Egglog.Output.print(reopened_result, :extract)
 ```
 
-with_program calls Program.close in after. It cannot reopen a closed handle.
-After editing a theory string, reevaluate dependent experiments: a previously
-loaded Program would retain its old theory. A query-local let/fact is available
-only in that query, never by accidentally relying on another cell's query.
+`with_program` closes the handle when the callback ends, including on failure.
+Changing the Elixir theory string does not modify a loaded Program; load it again
+to use the new theory. Return results, rather than handles, from either scoped API.
 
-## What To Try Next
+## Typed query results
 
-Natural next steps:
+Use `query!` for structured bindings rather than parsing extraction or print
+output. Each binding records the native sort, value type and decoded value;
+row order is unspecified. Both models below ask for the integer represented by
+the simplified expression. The result is `6`.
 
-* Open `egglog-tutorial/01-basics.livemd` for a deeper equality
-  saturation walkthrough.
-* Open `egglog-tutorial/02-datalog.livemd` for more relational
-  examples.
-* Open `egglog-tutorial/03-analysis.livemd` for richer analysis facts
-  and guarded rewrites.
-* Change the arithmetic rules above and watch how the snapshot changes.
+A Program query supplies its own input: it does not read a preceding run's clone.
+An EGraph query reads the session's current state. Matching itself does not run
+persistent rules; run the required schedule first.
+
+```elixir
+source = example_input <> simplify
+
+program_result =
+  Egglog.Program.with_program(math_theory, fn program ->
+    bindings = Egglog.Program.query!(program, source, [n: "i64"], ["(= goal (Num n))"])
+    snapshot = Egglog.Program.snapshot!(program, source, snapshot_options)
+
+    Kino.Layout.grid([
+      Kino.Inspect.new(bindings),
+      view.("Program query input on its own clone", snapshot)
+    ])
+  end)
+
+egraph_result =
+  Egglog.EGraph.with_egraph(math_theory, fn graph ->
+    Egglog.EGraph.run!(graph, source)
+    bindings = Egglog.EGraph.query!(graph, [n: "i64"], ["(= goal (Num n))"])
+    snapshot = Egglog.EGraph.snapshot!(graph, snapshot_options)
+
+    Kino.Layout.grid([
+      Kino.Inspect.new(bindings),
+      view.("EGraph query reads current state", snapshot)
+    ])
+  end)
+
+Kino.Layout.grid([program_result, egraph_result])
+```
+
+The Program query and its illustrative snapshot execute independently. In an
+application, request the query result alone if you do not need a graphic.
+
+## Handle errors and restore mutable state
+
+Non-bang functions return `{:ok, result}` or `{:error, reason}`; bang functions
+raise. A failed EGraph command sequence can leave earlier mutations in place.
+Here rules run successfully before an intentionally wrong check fails. The error
+does not undo simplification; popping the checkpoint does.
+
+```elixir
+Egglog.EGraph.with_egraph(math_theory, fn graph ->
+  Egglog.EGraph.run!(graph, example_input)
+  before = Egglog.EGraph.snapshot!(graph, snapshot_options)
+  :ok = Egglog.EGraph.push(graph)
+
+  {message, after_error} =
+    try do
+      {:error, {:check_failed, message}} =
+        Egglog.EGraph.run(graph, "(run 3)\n(check (= goal (Num 7)))")
+
+      Egglog.EGraph.run!(graph, "(check (= goal (Num 6)))")
+      {message, Egglog.EGraph.snapshot!(graph, snapshot_options)}
+    after
+      :ok = Egglog.EGraph.pop(graph)
+    end
+
+  Egglog.EGraph.run!(graph, "(fail (check (= goal (Num 6))))")
+  restored = Egglog.EGraph.snapshot!(graph, snapshot_options)
+
+  Kino.Layout.grid([
+    view.("Before experiment", before),
+    Kino.Text.new(message),
+    view.("After failed check: simplification remains", after_error),
+    view.("After pop: original state restored", restored)
+  ])
+end)
+```
+
+A failed Program run does not change the base: its work is clone-local. Failed
+checks mean an equality was not established in that run, not that it is disproven.
+
+Parser errors additionally expose a structured source location. Byte offsets are
+zero-based UTF-8 positions; line and column coordinates are one-based. Source that
+fails to parse has no graph to display.
+
+```elixir
+{:error, {:invalid_theory, message, location}} = Egglog.parse(")")
+Kino.Layout.grid([Kino.Text.new(message), Kino.Inspect.new(location)])
+```
+
+## Resource ownership and application integration
+
+Use `with_program` and `with_egraph` for bounded operations: both close in `after`,
+even when the callback raises. Return values or snapshots, not handles that would
+already be closed. For a long-lived service, use explicit `Program.load` or
+`EGraph.new` and arrange matching `close` calls in the owning component's lifecycle.
+An EGraph session also closes when its creator process exits.
+
+Calls sharing a handle are serialized. Independent handles can execute concurrently;
+`num_threads` configures native parallelism at creation/load time. A caller timeout
+does not cancel native computation. Scope theories, inputs and schedules according
+to the application's resource requirements.
+
+A loaded Program does not follow changes to its Elixir source string. Load a new
+base when changing a theory. Parsed `Egglog.Commands` can be reused to avoid repeated
+parsing; they do not make Program runs share mutable state.
+
+## Rendering, exports and limits
+
+All graphs use `render: :auto`: native **DOT → Graphviz → SVG** when `dot` is
+available, otherwise native **JSON → wrapper converter → Mermaid**. Kino supplies
+the notebook display; the library itself has no Kino dependency.
+
+Snapshot limits cap the serialized picture, not the reasoning work. Partial-view
+notices report omitted data. Extraction chooses a representative without deleting
+equivalent alternatives. Neither a bounded run count nor the output limit is a
+general native time or memory limit.
+
+Snapshots retain format-specific source: `dot`/`svg` for SVG snapshots and
+`json`/`mermaid` for Mermaid snapshots. Save those strings directly, or use the
+corresponding artifact-path options. `Egglog.Snapshot.to_mermaid/1` converts retained
+JSON without rerunning egglog. Explicit `render: :dot` and `render: :json` need no
+layout engine; SVG requires Graphviz, and Mermaid rendering needs a frontend.
+
+The tutorial notebooks also use `Egglog.Program.Step` and `next.(previous, code)`
+as replayable Livebook conveniences over Program.
+
+See the [shared guide](https://github.com/davfuenmayor/egglog_elixir/blob/main/livebooks/README.md)
+for option details and native-extension boundaries, or return to the [index](index.livemd)
+for the language tutorial and other notebooks.

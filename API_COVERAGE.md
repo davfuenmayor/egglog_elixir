@@ -65,26 +65,36 @@ validation, missing-file restoration, concurrent installs and relocation.
 Included bundles and platform-specific coverage are recorded in
 [MULTIPLATFORM.md](MULTIPLATFORM.md). No release assets have been published.
 
-Local verification: **91 ExUnit checks (90 tests, 1 doctest)** pass on Linux.
+Local verification: **109 ExUnit checks (108 tests, 1 doctest)** pass on Linux.
 The actual Hex package installs and executes both APIs with an empty PATH.
 Earlier native verification passed **2 panic-cleanup tests**, documentation with
 warnings as errors, Clippy, and compilation with the documented Rust 1.91.0
 minimum. See MULTIPLATFORM.md for platform/runtime results.
 
-The P1 notebook changes add no native/reset/replay API. Chapters 01–05 use
-explicit source baselines and scoped Program queries. Getting Started includes
-intentional sequential EGraph mutation/rollback in one scoped cell.
+The notebooks use `Egglog.Program.Step.new/1` and `next/3` to package source
+history and scoped Program snapshots as ordinary data. No native/reset/replay
+primitive was added. A notebook-local Kino protocol displays steps automatically;
+the library has no Kino dependency. Wrapper mechanics are centralized in the
+Livebook guide and illustrated in Getting Started. The six lesson chapters
+follow upstream and include native illustrations for the Rust compiler case
+study. Seven notebooks provide executable graph views; the eighth is a
+navigation-only index. Experimental cost/scheduler and Rust extension examples remain reference
+material as explained in the guide.
 
-scripts/check_livebooks.exs evaluates disposable copies in real Livebook 0.19.9.
-The six executable notebooks pass **139 code cells**; the compiler guide imports
-without warnings and is reported as **reference-only (zero code cells)**.
-The cell checker passes twice without Graphviz, reruns each executable cell
-consecutively, revisits early phases after later ones, and checks theory edits
-versus reloading. Closed-handle and native push/pop expectations execute too.
+scripts/check_livebooks.exs evaluates disposable copies in real Livebook.
+The refreshed notebooks contain **111 executable cells** and **111 automatic
+graph snapshots**. The cell checker passes with Graphviz and without it, reruns
+each executable cell consecutively, revisits early steps after later ones, and
+checks theory edits versus reloading. The real Livebook check verifies that all
+98 tutorial step cells produce graph layouts through the custom Kino protocol.
+Getting Started illustrates both models, structured queries and error recovery
+with thirteen scoped Program/EGraph snapshots. The index imports without a runtime.
 
 scripts/check_mermaid_browser.cjs uses Chromium and Kino's actual bundled
-assets to verify rendered SVG counts/escaped labels and detect parse/size
-failures. P1 validation rendered **90 diagrams** (86 captured notebook views
-including reruns/revisits plus four corner-case fixtures) with Kino 0.19.1.
-Analysis displays remain explicitly capped with omission notices; JSON summaries
-remain uncapped. Browser tooling is dev-only.
+assets to verify rendered SVG counts, labels, argument positions and class-boundary
+arrowheads against native DOT. The refreshed notebooks passed **440 captured
+graph variants** across both full passes, consecutive reruns and step revisits.
+After the Step API conversion, another **247 captured variants** passed the same
+browser/native-DOT checks through the new step display path.
+All lesson graph views use explicit serialization caps and display omission
+notices; summary-only cells have been removed. Browser tooling is dev-only.

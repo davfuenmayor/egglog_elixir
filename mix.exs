@@ -39,6 +39,8 @@ defmodule EgglogElixir.MixProject do
         "KNOWN_ISSUES.md",
         "MULTIPLATFORM.md",
         "livebooks/README.md",
+        "livebooks/LICENSE-UPSTREAM.md",
+        "livebooks/index.livemd",
         "livebooks/getting_started.livemd",
         "livebooks/egglog-tutorial/README.md",
         "livebooks/egglog-tutorial/01-basics.livemd",
