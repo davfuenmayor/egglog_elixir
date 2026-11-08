@@ -5,7 +5,7 @@ Scope: pinned egglog 3.0.0 revision
 Reviewed 2026-11-08 against the current working tree.
 Only outstanding issues and limitations are listed here.
 [API_COVERAGE.md](API_COVERAGE.md) records supported functionality and omissions.
-Open API proposals are in `egglog_elixir_improvements.md`.
+Open API proposals are in [egglog_elixir_improvements.md](egglog_elixir_improvements.md).
 
 ## Precompiled distribution gaps
 
@@ -19,7 +19,7 @@ build commands and exact coverage.
 `lib/egglog/common.ex` returns a successful DOT snapshot after an automatic SVG
 failure/timeout, but drops the renderer error. The snapshot's format identifies
 the fallback, not its cause. A rendering report remains an open proposal in
-`egglog_elixir_improvements.md`.
+[egglog_elixir_improvements.md](egglog_elixir_improvements.md).
 
 ## Mermaid layout fidelity
 

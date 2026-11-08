@@ -91,7 +91,7 @@ for path <- Path.wildcard(Path.join(root, "livebooks/**/*.livemd")) do
     {binding, env}
   end
 
-  for pass <- 1..2 do
+  for pass <- 1..2, executable != [] do
     initial = {[], Code.env_for_eval(file: path)}
 
     state =

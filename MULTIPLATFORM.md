@@ -11,7 +11,7 @@ Normal installs do not invoke Cargo or contact GitHub releases.
 
 | Target | Build and validation |
 | --- | --- |
-| Linux x86-64, glibc | Included; 100 checks passed with structured parse diagnostics; documentation builds without warnings |
+| Linux x86-64, glibc | Included; 109 checks and documentation generation pass on Linux |
 | Linux ARM64, glibc | Included; rebuilt for structured parse diagnostics; runtime revalidation pending (previous revision: 78 checks under QEMU) |
 | Windows x86-64 | Included; rebuilt for structured parse diagnostics; runtime revalidation pending (previous revision: 75 checks under Wine) |
 | macOS Intel | Native recipe prepared; Mac runner required |
@@ -82,10 +82,15 @@ Native builds can use `RUSTFLAGS='-C target-cpu=native'` for local tuning; do no
 redistribute CPU-specific bundles to other machines. Benchmark improvements
 and rerun tests. Restart BEAM/Livebook after changing a loaded NIF.
 
-The previous opt-in RustlerPrecompiled URL/checksum workflow is replaced by
-complete local bundles. No unpublished release URL is needed for installation.
-The publishing script verifies reviewed archives and checksums, but is never
-run by a build or notebook. No release assets have been uploaded here.
+Publication is separate from installation. After an explicit release request,
+commit reviewed artifacts, tag that commit as `v0.2.0`, and run
+`MIX_ENV=prod mix run scripts/publish_native.exs` with authenticated GitHub CLI.
+The script verifies the clean tagged source and hashes and refuses replacement
+of an existing release. Builds and notebooks never publish anything.
+
+For local upstream experiments, add a temporary Cargo Git-source patch to
+`native/egglog_nif/Cargo.toml`, update its lockfile, and rebuild from source.
+Restore the pin/lockfile before distribution.
 
 ## Test
 
@@ -99,13 +104,12 @@ Run installation and relocation checks with Cargo absent from `PATH`. The
 bundle tests reject checksum, target and payload errors and restore missing
 native files. A fresh VM loads an app moved to a path containing spaces and
 executes both mutable e-graph and isolated program queries plus JSON snapshots.
-The cell checker evaluates all seven original notebooks twice. Actual Livebook
-parser/runtime checks are separate; commands are in README.md. Disposable
-copies protect authoritative notebook files from autosave. Notebook text and
-lesson code remain verbatim; only setup cells may be changed.
+The cell checker evaluates the seven executable notebooks twice and recognizes
+the navigation-only index. Real Livebook parser/runtime checks use disposable
+copies to protect sources from autosave; commands are in README.md.
 
-Graphviz is optional. Without `dot`, default snapshots return DOT text and JSON
-snapshots work normally. Automatic rendering also returns native DOT if Graphviz
+Graphviz is optional. Without `dot`, automatic snapshots return JSON-derived
+Mermaid; explicit DOT/JSON outputs remain available. Automatic rendering also returns native DOT if Graphviz
 fails or times out; explicit `render: :svg` retains renderer errors. Check both the
 Graphviz-enabled workflow and the default fallback without changing lessons.
 
@@ -130,52 +134,29 @@ emulated checks separately from native hardware. Check package size with
 - Recheck complete package size after adding macOS artifacts; if it exceeds
   the package host's limit, release assets need hosting and download support.
 - Tagging/publication and testing the publishing script against a real release
-  require an explicit release request. Nothing has been published.
+  require an explicit release request.
 
-## Results in this workspace
+## Validation evidence
 
-Elixir 1.20.4, OTP 29.1.1, Rust 1.98.1, Debian 13/glibc 2.41; QEMU user emulation
-for ARM64 and Wine 10 with the official Windows OTP ZIP for Windows x86-64.
+Linux checks use Elixir 1.20.4, OTP 29.1.1 and Debian 13/glibc 2.41. Current local
+coverage is 109 ExUnit checks, documentation generation, cell reruns with both
+automatic renderer paths, and Livebook 0.19.10 imports/execution of seven notebooks
+plus a navigation-only index (111 executable cells). These notebooks have not been
+revalidated on Windows or ARM64 after the current revisions.
 
-- Linux: **78 passed**, including relocation to a path with spaces, both public
-  APIs, parsed commands, thread configuration, rollback, int64 limits, snapshots,
-  checksum/target/payload rejection, restoration and explicit/automatic renderer
-  failure handling. Cargo was absent from `PATH` for installation and tests.
-- Windows/Wine: **75 passed**, including real Windows DLL loading, fresh
-  dependency compilation and relocation. Three POSIX shell/process renderer
-  probes in `graphviz_test.exs` are explicitly skipped on Windows; the timeout-option validation runs on both platforms.
-- ARM64/QEMU: **78 checks validated** on the actual ARM64 OTP/BEAM and NIF.
-  The complete suite passed 77 checks; the copied-priv regression initially
-  inherited `MIX_ENV=test` while expecting a `dev` fixture directory. After
-  isolating the child environment, that test passed its targeted rerun. The
-  seven installation tests also passed on Linux and Windows after this fix.
-  Coverage includes fresh-VM relocation, concurrent installs, restoration,
-  native queries and renderer failure handling. The separate native smoke
-  check also passed. These are emulated results, not native hardware validation.
-- Before the upstream-prose refresh, Livebook 0.19.9: **all seven original notebooks passed** through its parser,
-  Standalone runtime and Kino (139 executable cells). The cell checker also
-  evaluated all seven twice without Graphviz on Linux and Windows/Wine. The same
-  lesson cells also passed twice on ARM64 BEAM/NIF under QEMU, using preloaded
-  Kino/Jason/Table BEAM files; this ARM check does not exercise dependency
-  installation or Livebook's Standalone runtime. No notebook files were edited.
-- After the upstream-prose refresh, Livebook 0.19.10 evaluated all seven
-  notebooks (111 executable cells after separating index and application guide) on Linux. The cell checker also passed
-  consecutive reruns and early-step revisits with Graphviz and without it.
-  These refreshed notebooks have not been revalidated on Windows or ARM64.
-- The actual Hex archive built successfully (about **8.9 MiB**, three bundles).
-  It was unpacked and installed with an **empty PATH**: no Cargo, Rust, C
-  compiler, make or Graphviz. Both APIs, queries, extraction, rollback, snapshots
-  and default DOT rendering passed from the packaged application.
-- Linux `ldd` shows only bundled private `libgcc_s`, glibc and libm. Windows PE
-  imports contain only Windows system DLLs; no MinGW/C++ runtime install is
-  required. Bundles include resolved crate and system runtime notices.
+Older platform checks, before the structured-parser bundle refresh:
 
-The cached ARM runtime uses matching host `erlexec`, `erl_child_setup` and
-`inet_gethost` executables because this container lacks binfmt registration.
-The host launcher parses VM flags and invokes an ARM64 BEAM through a QEMU
-wrapper; spawned Elixir VMs use the same wrapper. The BEAM, native OTP libraries
-and NIF are ARM64; full-system or native ARM testing remains pending. Portable
-OTP/Elixir library BEAM files match the tested OTP version.
-All emulation roots, generated test copies and detailed logs remain outside
-the repo. The workspace Containerfile retains cross compilers, Rust target
-libraries, Wine and QEMU for repeat builds.
+| Runtime | Recorded evidence | Limit |
+| --- | --- | --- |
+| Windows/Wine 10 | 75 checks, Windows DLL loading, dependency compilation and relocation | Three POSIX renderer probes skipped; no native Windows hardware check |
+| ARM64/QEMU | 78 checks including a targeted installation-regression rerun; native smoke check | Emulated BEAM/NIF; no native ARM hardware check |
+
+The package was previously built locally (about 8.9 MiB, three bundles), unpacked,
+and exercised with an empty PATH. This checked both APIs, snapshots and relocation,
+not publication or the latest notebook contents. Native dependency inspection found
+private `libgcc_s`, glibc/libm on Linux and only system DLL imports on Windows.
+
+Emulation roots and logs remain outside the repository. The ARM test launcher uses
+host launch utilities around an ARM64 BEAM/NIF under QEMU, not a native/full-system
+installation. Current payload revalidation and oldest-platform tests remain open
+in the platform table and release checklist above.

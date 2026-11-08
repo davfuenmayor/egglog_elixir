@@ -41,8 +41,8 @@ defmodule EgglogLivebookCheck do
                   String.trim(source) != "", do: cell
 
       if cells == [] do
-        IO.puts("REFERENCE #{name}: imported without warnings; no executable cells")
-        {name, :reference_only}
+        IO.puts("NAVIGATION #{name}: imported without warnings; no executable cells")
+        {name, :navigation_only}
       else
         true = Enum.all?(cells, &(&1.language == :elixir))
         file = Livebook.FileSystem.File.local(path)
@@ -52,19 +52,19 @@ defmodule EgglogLivebookCheck do
           Livebook.Session.queue_full_evaluation(session.pid, [])
           await(session.pid, System.monotonic_time(:millisecond) + 600_000)
           data = Livebook.Session.get_data(session.pid)
-          step_cells = for section <- data.notebook.sections,
+          display_cells = for section <- data.notebook.sections,
                             %{source: source, outputs: outputs} <- section.cells,
                             String.contains?(source, "next.(step_") or
                               String.contains?(source, "with_egraph(math_theory") or
                               String.contains?(source, "with_program(math_theory"), do: outputs
-          true = step_cells != []
-          true = Enum.all?(step_cells, fn outputs ->
+          true = display_cells != []
+          true = Enum.all?(display_cells, fn outputs ->
             Enum.any?(outputs, fn
               {_, %{type: :grid, outputs: children}} -> children != []
               _ -> false
             end)
           end)
-          IO.puts("PASS #{name}: #{length(cells)} cells; #{length(step_cells)} step graph displays")
+          IO.puts("PASS #{name}: #{length(cells)} cells; #{length(display_cells)} graph display cells")
           {name, {:passed, length(cells)}}
         after
           Livebook.Session.close(session.pid)
