@@ -56,6 +56,8 @@ Kino.nothing()
 
 ## Case study: LA compiler
 
+> **⚠️ Warning:** Install Graphviz (`dot` on PATH) for better-looking graphs. Otherwise Mermaid is used, with less polished layouts.
+
 [Upstream lesson](https://egraphs-good.github.io/egglog-tutorial/06-case-study.html) · [back to index](../index.livemd)
 
 Note on setup cell: loads EgglogElixir and Kino, enables automatic graph displays, and defines `next.(previous, code)` for replayable steps.

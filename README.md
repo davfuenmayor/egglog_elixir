@@ -1,5 +1,7 @@
 # EgglogElixir
 
+> **⚠️ Warning:** Install Graphviz (`dot` on PATH) for better-looking graphs. Otherwise Mermaid is used, with less polished layouts.
+
 [![Run in Livebook](https://livebook.dev/badge/v1/blue.svg)](https://livebook.dev/run?url=https%3A%2F%2Fgithub.com%2Fdavfuenmayor%2Fegglog_elixir%2Fblob%2Fmain%2Flivebooks%2Findex.livemd)
 
 Thin Elixir wrapper around native Rust egglog. Reasoning stays in egglog;

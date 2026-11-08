@@ -58,6 +58,8 @@ Kino.nothing()
 
 ## Using EgglogElixir
 
+> **⚠️ Warning:** Install Graphviz (`dot` on PATH) for better-looking graphs. Otherwise Mermaid is used, with less polished layouts.
+
 [back to index](index.livemd)
 
 Note on setup cell: loads EgglogElixir and Kino and defines automatic snapshot displays.
