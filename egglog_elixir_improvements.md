@@ -163,3 +163,31 @@ version so agents can distinguish labelled-graph semantics from layout differenc
 
 **Acceptance:** Consumers can tell which endpoints and ordered arguments are
 represented without inferring them from arrow geometry or layout configuration.
+
+## P2: Focus native snapshots on relevant roots
+
+Expose `SerializeConfig.root_eclasses` and, if useful, temporary-function visibility
+through well-typed native values/expressions. Function-count caps can omit the
+subgraph needed for a particular target. Preserve native omissions and provenance;
+do not implement an unrelated graph slicer in Elixir or promise stable cross-run IDs.
+
+## P2: Render retained DOT through a public helper
+
+Provide public post-processing of retained DOT into SVG, reusing timeout, error and
+artifact machinery without another native execution. Support only transformations
+whose source representation is present; preserve omission metadata and provenance.
+This is separate from generating paired native formats.
+
+## P2: Show derived bindings alongside tutorial graphs
+
+Use existing query/lookup APIs to display shortest-path distances and analysis guard
+facts beside the corresponding graphs. Values must come from native results, never
+from source-text inspection or a second Elixir reasoning implementation.
+
+## P3: Share optional notebook presentation
+
+Consolidate repeated snapshot display recipes, including graph/source/stats/bindings
+views and omission notices. Keep execution separate and the library Kino-free.
+Multi-command outcomes must use native result information; silent output must not
+be relabeled as a successful check. Add an optional integration package only if
+repeated use warrants it.

@@ -31,8 +31,8 @@ because waiting timeouts do not cancel native execution. Caught panics discard
 the affected handle, including a reusable program base; ordinary native errors
 do not close it. Unexpected server exits retain `{:session_exit, reason}`.
 
-Options accept keyword lists or maps, including known string keys. Invalid,
-unknown, duplicate, or out-of-range options return `{:error, {:invalid_option,
+Program/EGraph options accept keyword lists or maps, including known string keys.
+Invalid, unknown, duplicate, or out-of-range options return `{:error, {:invalid_option,
 message}}` before execution. Snapshot helpers return tagged rendering/file errors.
 Output limits trim returned output after native execution; they do not cap native
 memory or execution time. Snapshots and earlier artifact writes are not rolled
@@ -47,12 +47,17 @@ back if a later artifact write fails.
   proof reconstruction. Native commands supported by the pinned parser remain
   available through raw source; wrapper helpers are not the whole language API.
 
-Snapshot decodes/summarizes native JSON and converts it to Mermaid without native reexecution. Program/EGraph snapshot helpers support render: :mermaid and mermaid_path exports. SVG rendering invokes Graphviz;
-no graph execution, rewriting, or extraction is reimplemented in Elixir.
-`Output.texts/2` and `Output.print/2` use only native result text. SVG rendering
-has a separate `:render_timeout` (30,000 milliseconds by default); expiration
-kills the renderer without changing native state. Explicit SVG requests return a
-tagged error; automatic rendering falls back to native DOT.
+`Snapshot` decodes native JSON and converts it to Mermaid without native
+reexecution. SVG is rendered from native DOT by Graphviz. `render: :auto` selects
+SVG when Graphviz is detected, otherwise JSON/Mermaid; automatic renderer failure
+retains DOT. `render_timeout` (30,000 ms by default) limits Graphviz, not egglog.
+`Output.texts/2` and `print/2` expose native result text without synthesizing outcomes.
+
+`Program.Step.new/1` and `next/3` are notebook utilities over Program, not another
+execution model. They retain source and snapshots without open handles. `next/3`
+reexecutes preceding source and raises on failure; it rebuilds the prefix before
+validating the current snapshot options. No incremental execution/cache is implied.
+Kino display implementations live in notebook setup; the library has no Kino dependency.
 
 ## Verification
 
@@ -62,39 +67,27 @@ checks and type errors, report aggregation, extraction truncation, parsed comman
 option validation, native partial mutation, snapshots and artifact failures.
 Native tests cover panic cleanup. Installation tests cover checksum/target/payload
 validation, missing-file restoration, concurrent installs and relocation.
-Included bundles and platform-specific coverage are recorded in
-[MULTIPLATFORM.md](MULTIPLATFORM.md). No release assets have been published.
+Platform-specific evidence and remaining release checks are recorded in
+[MULTIPLATFORM.md](MULTIPLATFORM.md). Current local verification: **109 ExUnit
+checks (108 tests, 1 doctest)** and documentation generation pass on Linux.
+Earlier native panic-cleanup and package-install results are recorded separately;
+they do not imply current native-platform validation on every target.
 
-Local verification: **109 ExUnit checks (108 tests, 1 doctest)** pass on Linux.
-The actual Hex package installs and executes both APIs with an empty PATH.
-Earlier native verification passed **2 panic-cleanup tests**, documentation with
-warnings as errors, Clippy, and compilation with the documented Rust 1.91.0
-minimum. See MULTIPLATFORM.md for platform/runtime results.
+The collection contains one navigation-only index and seven executable notebooks:
+Getting Started plus six upstream tutorial chapters. Their **111 executable cells**
+include **98 Step snapshots** and **13 direct Program/EGraph snapshots**. Experimental
+scheduler/cost-model and Rust extension sections remain reference material; ordinary
+native compiler-schema illustrations execute.
 
-The notebooks use `Egglog.Program.Step.new/1` and `next/3` to package source
-history and scoped Program snapshots as ordinary data. No native/reset/replay
-primitive was added. A notebook-local Kino protocol displays steps automatically;
-the library has no Kino dependency. Wrapper mechanics are centralized in the
-Livebook guide and illustrated in Getting Started. The six lesson chapters
-follow upstream and include native illustrations for the Rust compiler case
-study. Seven notebooks provide executable graph views; the eighth is a
-navigation-only index. Experimental cost/scheduler and Rust extension examples remain reference
-material as explained in the guide.
+- `scripts/check_livebook_cells.exs`: executes notebook source, repeats cells and
+  revisits earlier steps; `--no-dot` tests automatic Mermaid fallback.
+- `scripts/check_livebooks.exs`: imports/evaluates disposable copies in real
+  Livebook/Kino, verifies graph display cells, and imports the index without a runtime.
+- `scripts/graph_parity_capture.exs` and `scripts/native_graphviz`: capture retained
+  native JSON/Mermaid and derive reference DOT without rerunning egglog.
+- `scripts/check_mermaid_browser.cjs`: checks rendered labels, grouping, argument
+  order and arrowheads against native DOT using Kino's bundled frontend.
 
-scripts/check_livebooks.exs evaluates disposable copies in real Livebook.
-The refreshed notebooks contain **111 executable cells** and **111 automatic
-graph snapshots**. The cell checker passes with Graphviz and without it, reruns
-each executable cell consecutively, revisits early steps after later ones, and
-checks theory edits versus reloading. The real Livebook check verifies that all
-98 tutorial step cells produce graph layouts through the custom Kino protocol.
-Getting Started illustrates both models, structured queries and error recovery
-with thirteen scoped Program/EGraph snapshots. The index imports without a runtime.
-
-scripts/check_mermaid_browser.cjs uses Chromium and Kino's actual bundled
-assets to verify rendered SVG counts, labels, argument positions and class-boundary
-arrowheads against native DOT. The refreshed notebooks passed **440 captured
-graph variants** across both full passes, consecutive reruns and step revisits.
-After the Step API conversion, another **247 captured variants** passed the same
-browser/native-DOT checks through the new step display path.
-All lesson graph views use explicit serialization caps and display omission
-notices; summary-only cells have been removed. Browser tooling is dev-only.
+Validation commands are in [README.md](README.md#livebook-checks). Supported API
+limits are in [KNOWN_ISSUES.md](KNOWN_ISSUES.md); only open proposals belong in
+[the improvement backlog](egglog_elixir_improvements.md).
