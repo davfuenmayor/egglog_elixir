@@ -96,9 +96,9 @@ defmodule Egglog.NativeBundleTest do
     assert {_, 0} = install(dir)
     app_priv = Path.join(dir, "_build/dev/lib/egglog_elixir/priv")
 
-    # Windows copies priv; emulate that layout on hosts that use symlinks.
+    # Exercise a copied priv directory even when Mix creates a directory symlink.
     if match?({:ok, _}, File.read_link(app_priv)) do
-      File.rm!(app_priv)
+      File.rm_rf!(app_priv)
       File.cp_r!(Path.join(dir, "priv"), app_priv)
     end
 
