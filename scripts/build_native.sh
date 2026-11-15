@@ -17,13 +17,11 @@ cache=${EGGLOG_BUILD_ROOT:-${XDG_CACHE_HOME:-$HOME/.cache}/egglog-elixir}
 mkdir -p "$cache"
 cache=$(cd "$cache" && pwd -P)
 export CARGO_BUILD_JOBS=${BUILD_JOBS:-4}
-args=()
 case "$target" in
   linux-x86_64)
     [[ "$default" == linux-x86_64 ]] || { echo 'Build this target on Linux x86-64' >&2; exit 1; }
     triple=x86_64-unknown-linux-gnu; compiler=${CC:-cc}; stripper="strip"
     export CARGO_TARGET_DIR="$cache/target"
-    output="$CARGO_TARGET_DIR/release"
     library=libegglog_nif.so; extension=so ;;
   linux-aarch64)
     [[ "$default" == linux-* ]] || { echo 'Build Linux targets on Linux' >&2; exit 1; }
@@ -32,8 +30,7 @@ case "$target" in
     else compiler=aarch64-linux-gnu-gcc; stripper=aarch64-linux-gnu-strip; fi
     export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER="$compiler"
     export CARGO_TARGET_DIR="$cache/target-aarch64"
-    args=(--target "$triple")
-    output="$CARGO_TARGET_DIR/$triple/release"; library=libegglog_nif.so; extension=so ;;
+    library=libegglog_nif.so; extension=so ;;
   windows-x86_64)
     if [[ "$host" == x86_64-pc-windows-msvc ]]; then triple=$host
     else
@@ -42,18 +39,18 @@ case "$target" in
     fi
     export RUSTFLAGS="${RUSTFLAGS:-} -C target-feature=+crt-static"
     export CARGO_TARGET_DIR="$cache/target-windows"
-    args=(--target "$triple")
-    output="$CARGO_TARGET_DIR/$triple/release"; library=egglog_nif.dll; extension=dll ;;
+    library=egglog_nif.dll; extension=dll ;;
   macos-x86_64|macos-aarch64)
     [[ "$target" == "$default" ]] || { echo 'Build each macOS target on the matching Mac' >&2; exit 1; }
     if [[ "$target" == macos-x86_64 ]]; then triple=x86_64-apple-darwin; else triple=aarch64-apple-darwin; fi
     [[ "$host" == "$triple" ]] || { echo 'Rust toolchain must match the running architecture' >&2; exit 1; }
     export MACOSX_DEPLOYMENT_TARGET=${MACOSX_DEPLOYMENT_TARGET:-12.0}
     export CARGO_TARGET_DIR="$cache/target-$target"
-    output="$CARGO_TARGET_DIR/release"; library=libegglog_nif.dylib; extension=so ;;
+    library=libegglog_nif.dylib; extension=so ;;
   *) echo "Unsupported target: $target" >&2; exit 1 ;;
 esac
-cargo build --locked --release --manifest-path native/egglog_nif/Cargo.toml "${args[@]}"
+output="$CARGO_TARGET_DIR/$triple/release"
+cargo build --locked --release --target "$triple" --manifest-path native/egglog_nif/Cargo.toml
 cargo metadata --locked --format-version 1 --manifest-path native/egglog_nif/Cargo.toml > "$cache/metadata-$target.json"
 version=$(elixir --erl '+S 1:1' -e 'm = File.read!(hd(System.argv())) |> JSON.decode!(); IO.puts(Enum.find(m["packages"], &(&1["name"] == "egglog_nif"))["version"])' "$cache/metadata-$target.json")
 version=${version//$'\r'/}

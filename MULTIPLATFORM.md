@@ -90,7 +90,7 @@ and rerun tests. Restart BEAM/Livebook after changing a loaded NIF.
 
 See [MAINTAINING.md](MAINTAINING.md) for the migration checklist, artifact review,
 draft releases, public-download verification, Hex size checks and future releases.
-The workflow covers five native targets and minimum/current BEAM versions; actual
+The workflow covers five native targets on OTP 29 / Elixir 1.20; actual
 runner results remain pending. Local configuration does not establish support.
 
 Downloads use manifest digests and an external `EGGLOG_CACHE_DIR`. Source changes

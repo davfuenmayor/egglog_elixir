@@ -29,19 +29,20 @@ explains the draft-first process.
    and CI definitions. Push a branch/PR to run **Native builds**; keep the migration
    off the default branch until native downloads are published and verified. No history
    rewrite is needed. Use shallow clones to avoid downloading old binary history.
-2. Review all ten jobs: five native platforms, each with minimum/current BEAM.
-   Jobs build with Rust 1.91, run tests, inspect dependencies, exercise Graphviz
-   and automatic Mermaid fallback, and test an unpacked Hex package with empty PATH.
+2. Review all five platform jobs (OTP 29 / Elixir 1.20).
+   Jobs build with Rust 1.91, run tests, inspect dependencies, check rendering
+   (Graphviz when available, Mermaid fallback), and test an unpacked Hex package
+   with empty PATH.
    CI has no publishing permission. A passing configuration file is not a test run.
-3. Obtain one tested artifact per platform from the same reviewed run, normally
-   the OTP 27 jobs. Keep the archive, `.sha256` and `.json` together:
+3. Obtain one tested artifact per platform from the same reviewed run.
+   Keep the archive, `.sha256` and `.json` together:
 
    ```sh
    RUN_ID=YOUR_SUCCESSFUL_RUN_ID
    ARTIFACT_DIR=/tmp/egglog-native-release
    mkdir -p "$ARTIFACT_DIR"
    for target in linux-x86_64 linux-aarch64 windows-x86_64 macos-x86_64 macos-aarch64; do
-     gh run download "$RUN_ID" --name "native-$target-otp27" --dir "$ARTIFACT_DIR"
+     gh run download "$RUN_ID" --name "native-$target" --dir "$ARTIFACT_DIR"
    done
    elixir scripts/prepare_native_manifest.exs "$ARTIFACT_DIR" v0.2.0 > /tmp/candidate.json
    ```

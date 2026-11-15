@@ -9,7 +9,7 @@ Source review does not constitute new platform or release validation.
 ## P0: Validate and publish the native platform matrix
 
 The native CI workflow now covers both Macs, Linux x86-64/ARM64 and Windows with
-minimum/current BEAM versions, but remote runs and Mac artifacts remain pending.
+OTP 29 / Elixir 1.20; successful native runs and reviewed Mac artifacts remain pending.
 Review actual native results, dependency inspections, OS baselines and the complete
 five-target checksum/provenance manifest. Compiler-free Mac installation is not yet
 a delivered capability. Pin the course only after the release passes installation.
