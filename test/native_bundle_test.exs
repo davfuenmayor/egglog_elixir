@@ -167,6 +167,35 @@ defmodule Egglog.NativeBundleTest do
   end
 
   @tag :tmp_dir
+  test "downloads during Mix compilation with pruned code paths", %{tmp_dir: dir} do
+    {archive, _manifest} = release_fixture(dir)
+    {url, listener} = serve(File.read!(archive))
+    on_exit(fn -> :gen_tcp.close(listener) end)
+
+    mixfile = Path.join(dir, "mix.exs")
+    File.write!(mixfile, String.replace(File.read!(mixfile), "deps: deps(),", "deps: [],"))
+
+    # Hex may start HTTPS applications before Mix prunes undeclared code paths.
+    code = """
+    Mix.start()
+    Code.require_file("mix.exs")
+    {:ok, _} = Application.ensure_all_started(:inets)
+    {:ok, _} = Application.ensure_all_started(:ssl)
+    Mix.Task.run("compile")
+    """
+
+    env = [
+      {"EGGLOG_ELIXIR_BUNDLE", nil},
+      {"EGGLOG_CACHE_DIR", Path.join(dir, "cache")},
+      {"EGGLOG_RELEASE_BASE_URL", url}
+    ]
+
+    {output, status} = install(dir, env, code)
+    assert status == 0, output
+    assert_received :download
+  end
+
+  @tag :tmp_dir
   test "concurrent cold downloads install one verified cache entry", %{tmp_dir: dir} do
     {archive, manifest} = release_fixture(dir)
     {url, listener} = serve(File.read!(archive))
@@ -312,9 +341,11 @@ defmodule Egglog.NativeBundleTest do
     File.write!(archive <> ".sha256", hash <> "\n")
   end
 
-  defp install(dir, extra_env \\ []) do
-    code = "Mix.start(); Code.require_file(\"mix.exs\"); Mix.Tasks.Compile.EgglogNative.run([])"
-
+  defp install(
+         dir,
+         extra_env \\ [],
+         code \\ "Mix.start(); Code.require_file(\"mix.exs\"); Mix.Tasks.Compile.EgglogNative.run([])"
+       ) do
     System.cmd(System.find_executable("elixir"), ["--erl", "+S 1:1", "-e", code],
       cd: dir,
       stderr_to_stdout: true,
