@@ -68,8 +68,8 @@ option validation, native partial mutation, snapshots and artifact failures.
 Native tests cover panic cleanup. Installation tests cover checksum/target/payload
 validation, missing-file restoration, concurrent installs and relocation.
 Platform-specific evidence and remaining release checks are recorded in
-[MULTIPLATFORM.md](MULTIPLATFORM.md). Current local verification: **109 ExUnit
-checks (108 tests, 1 doctest)** and documentation generation pass on Linux.
+[MULTIPLATFORM.md](MULTIPLATFORM.md). Current local verification: **114 ExUnit
+checks (113 tests, 1 doctest)** and documentation generation pass on Linux.
 Earlier native panic-cleanup and package-install results are recorded separately;
 they do not imply current native-platform validation on every target.
 

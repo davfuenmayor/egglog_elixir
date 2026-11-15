@@ -1,0 +1,3 @@
+# Keep native source fingerprints and shell entry points identical on Windows.
+native/egglog_nif/** text eol=lf
+*.sh text eol=lf

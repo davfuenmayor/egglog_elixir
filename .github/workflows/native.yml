@@ -1,0 +1,102 @@
+name: Native builds
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native:
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - {runner: ubuntu-22.04, target: linux-x86_64}
+          - {runner: ubuntu-22.04-arm, target: linux-aarch64}
+          - {runner: windows-2022, target: windows-x86_64}
+          - {runner: macos-15-intel, target: macos-x86_64}
+          - {runner: macos-15, target: macos-aarch64}
+        beam:
+          - {otp: '27', elixir: '1.19'}
+          - {otp: '29', elixir: '1.20'}
+    runs-on: ${{ matrix.platform.runner }}
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    env:
+      EGGLOG_TARGET: ${{ matrix.platform.target }}
+      BUILD_JOBS: '3'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: erlef/setup-beam@0f75c29430f34bb5af4cce5e3b7f6a8860fca236 # v1
+        with:
+          otp-version: ${{ matrix.beam.otp }}
+          elixir-version: ${{ matrix.beam.elixir }}
+      - name: Rust toolchain
+        run: |
+          rustup toolchain install 1.91.0 --profile minimal --component rust-docs
+          rustup default 1.91.0
+      - name: Linux dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y patchelf graphviz
+      - name: macOS Graphviz
+        if: runner.os == 'macOS'
+        run: brew install graphviz
+      - name: Windows Graphviz
+        if: runner.os == 'Windows'
+        run: |
+          choco install graphviz --no-progress -y
+          printf '%s\n' 'C:\Program Files\Graphviz\bin' >> "$GITHUB_PATH"
+      - name: Build outside checkout
+        run: |
+          export EGGLOG_ARTIFACT_DIR="$RUNNER_TEMP/artifacts"
+          scripts/build_native.sh | tee "$RUNNER_TEMP/native-build.log"
+          archive=$(sed -n 's/^EGGLOG_NATIVE_ARCHIVE=//p' "$RUNNER_TEMP/native-build.log")
+          echo "EGGLOG_ELIXIR_BUNDLE=$archive" >> "$GITHUB_ENV"
+          stage=$(sed -n 's/^EGGLOG_NATIVE_STAGE=//p' "$RUNNER_TEMP/native-build.log")
+          if [ "$RUNNER_OS" = Windows ]; then stage=$(cygpath -w "$stage"); fi
+          echo "EGGLOG_STAGE_DIR=$stage" >> "$GITHUB_ENV"
+      - name: Native dependency inspection
+        run: |
+          case "$RUNNER_OS" in
+            Linux) readelf -d "$EGGLOG_STAGE_DIR/egglog_nif.so" ;;
+            macOS) otool -L "$EGGLOG_STAGE_DIR/egglog_nif.so" ;;
+            Windows) echo 'MSVC imports checked in the following step' ;;
+          esac
+      - name: Windows dependency inspection
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $vs = & "${env:ProgramFiles(x86)}/Microsoft Visual Studio/Installer/vswhere.exe" -latest -property installationPath
+          $dumpbin = Get-ChildItem "$vs/VC/Tools/MSVC/*/bin/Hostx64/x64/dumpbin.exe" | Sort-Object FullName -Descending | Select-Object -First 1
+          if (-not $dumpbin) { throw "dumpbin not found" }
+          $imports = & $dumpbin.FullName /DEPENDENTS "$env:EGGLOG_STAGE_DIR/egglog_nif.dll"
+          if ($LASTEXITCODE -ne 0) { throw "Dependency inspection failed" }
+          $imports | Tee-Object -FilePath "$env:EGGLOG_ELIXIR_BUNDLE.imports.txt"
+          if (($imports -join "`n") -match '(?i)vcruntime|msvcp|libgcc|libstdc\+\+|libwinpthread') {
+            throw "Non-system runtime dependency; check static CRT configuration"
+          }
+      - name: Install and test
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+          mix test
+          mix run scripts/check_native.exs
+          mix run scripts/check_rendering.exs
+          mix docs --warnings-as-errors
+          git diff --exit-code
+      - name: Prepare small Hex package
+        run: |
+          mix hex.build -o "$RUNNER_TEMP/egglog.tar"
+          elixir scripts/check_package.exs "$RUNNER_TEMP/egglog.tar"
+          elixir scripts/check_packaged_install.exs "$RUNNER_TEMP/egglog.tar"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: native-${{ matrix.platform.target }}-otp${{ matrix.beam.otp }}
+          path: ${{ runner.temp }}/artifacts/*
+          if-no-files-found: error

@@ -2,22 +2,25 @@
 
 The wrapper targets egglog 3.0.0 at the Git revision pinned in
 `native/egglog_nif/Cargo.toml` and `Cargo.lock`. Rustler supplies the native NIF
-boundary; a Mix compiler installs a checksum-verified local platform bundle.
+boundary; a Mix compiler installs a manifest-verified archive from an external cache/download.
 The Elixir loader uses the standard NIF API and native Windows path separators.
 No Elixir-side Rustler/compiler dependency is needed for a binary installation.
-Normal installs do not invoke Cargo or contact GitHub releases.
+Normal installs do not invoke Cargo. **Release migration is not yet published**:
+fresh machines currently need an external bundle or explicit source build.
+The three manifest entries import existing reviewed checksums; Mac entries await
+native CI results. Do not publish Hex until release downloads are available.
 
 ## Platform status
 
 | Target | Build and validation |
 | --- | --- |
-| Linux x86-64, glibc | Included; 109 checks and documentation generation pass on Linux |
-| Linux ARM64, glibc | Included; rebuilt for structured parse diagnostics; runtime revalidation pending (previous revision: 78 checks under QEMU) |
-| Windows x86-64 | Included; rebuilt for structured parse diagnostics; runtime revalidation pending (previous revision: 75 checks under Wine) |
+| Linux x86-64, glibc | Reviewed legacy checksum; Linux source build and local tests pass; release upload pending |
+| Linux ARM64, glibc | Reviewed legacy checksum; native CI execution pending (previous revision: 78 checks under QEMU) |
+| Windows x86-64 | Reviewed legacy checksum; native CI execution pending (previous revision: 75 checks under Wine) |
 | macOS Intel | Native recipe prepared; Mac runner required |
 | macOS Apple Silicon | Native recipe prepared; Mac runner required |
 
-Only included, tested bundles provide an installation without build tools.
+Compiler-free installation requires a published, reviewed matching artifact.
 Native macOS validation is unavailable in this Linux container. musl/Alpine,
 32-bit BEAM and Windows ARM64 are excluded. Match the running BEAM's CPU;
 an Intel BEAM under Rosetta needs the Intel bundle.
@@ -57,7 +60,8 @@ Rust GNU with the POSIX MinGW toolchain. Run the builder in Git Bash with the
 matching linker on `PATH`. Native Windows recipes still need a Windows runner;
 Wine validation does not replace that check.
 
-Archives and SHA-256 sidecars go into `native/precompiled/`. Each contains
+Archives, SHA-256 sidecars and build metadata go into the external build cache
+under `artifacts/`; `EGGLOG_ARTIFACT_DIR` overrides that output directory. Each contains
 `native/` with the NIF, target identifier, Cargo lockfile and third-party license
 notices. Build trees, metadata, test copies and logs stay under
 `${XDG_CACHE_HOME:-$HOME/.cache}/egglog-elixir`, outside the repo. Override with
@@ -82,11 +86,16 @@ Native builds can use `RUSTFLAGS='-C target-cpu=native'` for local tuning; do no
 redistribute CPU-specific bundles to other machines. Benchmark improvements
 and rerun tests. Restart BEAM/Livebook after changing a loaded NIF.
 
-Publication is separate from installation. After an explicit release request,
-commit reviewed artifacts, tag that commit as `v0.2.0`, and run
-`MIX_ENV=prod mix run scripts/publish_native.exs` with authenticated GitHub CLI.
-The script verifies the clean tagged source and hashes and refuses replacement
-of an existing release. Builds and notebooks never publish anything.
+## Native CI and release procedure
+
+See [MAINTAINING.md](MAINTAINING.md) for the migration checklist, artifact review,
+draft releases, public-download verification, Hex size checks and future releases.
+The workflow covers five native targets and minimum/current BEAM versions; actual
+runner results remain pending. Local configuration does not establish support.
+
+Downloads use manifest digests and an external `EGGLOG_CACHE_DIR`. Source changes
+require an explicit build until reviewed assets match. `EGGLOG_RELEASE_BASE_URL`
+selects an HTTPS mirror; loopback HTTP exists only for installer tests.
 
 For local upstream experiments, add a temporary Cargo Git-source patch to
 `native/egglog_nif/Cargo.toml`, update its lockfile, and rebuild from source.
@@ -129,8 +138,8 @@ emulated checks separately from native hardware. Check package size with
 - Validate the three POSIX renderer probes with native Windows equivalents and
   a real Windows Graphviz installation, including timeout/process cleanup.
 - Verify minimum glibc/macOS/Windows and OTP versions on real target runtimes.
-- Check redistribution notices for native MSVC/MSYS2 and macOS builds; included
-  bundles already carry crate, Rust standard-library and GCC/MinGW notices.
+- Check redistribution notices for native MSVC/MSYS2 and macOS builds; artifact
+  bundles must retain crate, Rust standard-library and GCC/MinGW notices.
 - Recheck complete package size after adding macOS artifacts; if it exceeds
   the package host's limit, release assets need hosting and download support.
 - Tagging/publication and testing the publishing script against a real release
@@ -139,7 +148,7 @@ emulated checks separately from native hardware. Check package size with
 ## Validation evidence
 
 Linux checks use Elixir 1.20.4, OTP 29.1.1 and Debian 13/glibc 2.41. Current local
-coverage is 109 ExUnit checks, documentation generation, cell reruns with both
+coverage is 114 ExUnit checks, documentation generation, cell reruns with both
 automatic renderer paths, and Livebook 0.19.10 imports/execution of seven notebooks
 plus a navigation-only index (111 executable cells). These notebooks have not been
 revalidated on Windows or ARM64 after the current revisions.

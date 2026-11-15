@@ -2,14 +2,16 @@
 
 Scope: pinned egglog 3.0.0 revision
 `b912caa9694c0c029f9ae3d91db0adc8824e14f5`.
-Reviewed 2026-11-08 against the current working tree.
+Reviewed 2026-11-15 against the current working tree.
 Only outstanding issues and limitations are listed here.
 [API_COVERAGE.md](API_COVERAGE.md) records supported functionality and omissions.
 Open API proposals are in [egglog_elixir_improvements.md](egglog_elixir_improvements.md).
 
 ## Precompiled distribution gaps
 
-macOS bundles still require matching Mac builders and runners. Windows validation
+The release-download migration is pending publication; fresh machines need a
+source build or external bundle until the reviewed assets are available.
+macOS jobs are configured but still need successful native runs and reviewed artifacts. Windows validation
 uses Wine; ARM64 validation uses QEMU. Native hardware and minimum OS/OTP
 validation remain release checks. See [MULTIPLATFORM.md](MULTIPLATFORM.md) for
 build commands and exact coverage.

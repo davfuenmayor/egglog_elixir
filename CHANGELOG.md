@@ -2,6 +2,12 @@
 
 ## Unreleased (0.2.0)
 
+- Remove native archives from Git/Hex. Add a source-bound checksum manifest,
+  verified HTTPS downloads, an external cache and explicit offline/source overrides.
+  Build outside the checkout; add native five-platform CI, draft-release validation
+  and a Hex package size/binary exclusion check. Mac delivery and public release
+  downloads remain pending real runner results and publication.
+
 - Pin native egglog 3.0.0 revision `b912caa9694c0c029f9ae3d91db0adc8824e14f5`.
   Add declaration inspection, typed pattern queries, table clearing and per-graph
   thread configuration.
@@ -23,8 +29,7 @@
   experimental/Rust material as reference. Put helpers in notebook setup cells.
 - Add consecutive cell reruns, earlier-step revisits, disposable Livebook runtime
   checks and browser rendering validation. Keep one canonical improvement backlog.
-- Bundle checksum-verified Linux x86-64/ARM64 and Windows x86-64 native builds;
-  prepare macOS recipes. Add installation, relocation and artifact validation.
+- Prepare Linux x86-64/ARM64, Windows and macOS native builds. Add installation, relocation and artifact validation.
 - Close scoped resources on failure, monitor mutable-session creators, discard
   handles after caught native panics and preserve unexpected server-exit reasons.
   Use dirty scheduling for native operations; remove public typespecs.

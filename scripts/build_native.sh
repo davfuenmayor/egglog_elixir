@@ -11,23 +11,24 @@ case "$(uname -s)-$(uname -m)" in
   *) echo 'Unsupported native build host' >&2; exit 1 ;;
 esac
 [[ "$host" != *musl* ]] || { echo 'musl is not supported' >&2; exit 1; }
+host=${host//$'\r'/}
 target=${EGGLOG_TARGET:-$default}
 cache=${EGGLOG_BUILD_ROOT:-${XDG_CACHE_HOME:-$HOME/.cache}/egglog-elixir}
-mkdir -p "$cache" native/precompiled
+mkdir -p "$cache"
 cache=$(cd "$cache" && pwd -P)
 export CARGO_BUILD_JOBS=${BUILD_JOBS:-4}
 args=()
 case "$target" in
   linux-x86_64)
     [[ "$default" == linux-x86_64 ]] || { echo 'Build this target on Linux x86-64' >&2; exit 1; }
-    triple=x86_64-unknown-linux-gnu; compiler=${CC:-cc}; stripper=strip
+    triple=x86_64-unknown-linux-gnu; compiler=${CC:-cc}; stripper="strip"
     export CARGO_TARGET_DIR="$cache/target"
     output="$CARGO_TARGET_DIR/release"
     library=libegglog_nif.so; extension=so ;;
   linux-aarch64)
     [[ "$default" == linux-* ]] || { echo 'Build Linux targets on Linux' >&2; exit 1; }
     triple=aarch64-unknown-linux-gnu
-    if [[ "$default" == linux-aarch64 ]]; then compiler=${CC:-cc}; stripper=strip
+    if [[ "$default" == linux-aarch64 ]]; then compiler=${CC:-cc}; stripper="strip"
     else compiler=aarch64-linux-gnu-gcc; stripper=aarch64-linux-gnu-strip; fi
     export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER="$compiler"
     export CARGO_TARGET_DIR="$cache/target-aarch64"
@@ -55,6 +56,7 @@ esac
 cargo build --locked --release --manifest-path native/egglog_nif/Cargo.toml "${args[@]}"
 cargo metadata --locked --format-version 1 --manifest-path native/egglog_nif/Cargo.toml > "$cache/metadata-$target.json"
 version=$(elixir --erl '+S 1:1' -e 'm = File.read!(hd(System.argv())) |> JSON.decode!(); IO.puts(Enum.find(m["packages"], &(&1["name"] == "egglog_nif"))["version"])' "$cache/metadata-$target.json")
+version=${version//$'\r'/}
 stage="$cache/stage/$target"
 elixir --erl '+S 1:1' -e 'File.rm_rf!(hd(System.argv()))' "$stage"
 mkdir -p "$stage/native/licenses"
@@ -77,6 +79,8 @@ case "$target" in
   linux-*)
     binary="$stage/native/egglog_nif.so"
     "$stripper" "$binary"
+    # Loader token, not a shell variable.
+    # shellcheck disable=SC2016
     patchelf --set-rpath '$ORIGIN' "$binary"
     cp -L "$("$compiler" -print-file-name=libgcc_s.so.1)" "$stage/native/egglog_libgcc_s.so.1"
     patchelf --set-soname egglog_libgcc_s.so.1 "$stage/native/egglog_libgcc_s.so.1"
@@ -116,7 +120,26 @@ case "$target" in
       fi
     fi ;;
 esac
-archive="native/precompiled/egglog-$version-$target.tar.gz"
+artifacts=${EGGLOG_ARTIFACT_DIR:-$cache/artifacts}
+mkdir -p "$artifacts"
+artifacts=$(cd "$artifacts" && pwd -P)
+archive="$artifacts/egglog-$version-$target.tar.gz"
 tar -czf "$archive" -C "$stage" native
 elixir --erl '+S 1:1' -e '[file] = System.argv(); hash = :crypto.hash(:sha256, File.read!(file)) |> Base.encode16(case: :lower); File.write!(file <> ".sha256", hash <> "\n")' "$archive"
-printf 'Built %s (%s)\n' "$target" "$triple"
+elixir --erl '+S 1:1' -e '
+Mix.start()
+Code.require_file("mix.exs")
+[file, target, triple] = System.argv()
+{toolchain, 0} = System.cmd("rustc", ["-vV"])
+libc = if :os.type() == {:unix, :linux}, do: System.cmd("ldd", ["--version"]) |> elem(0) |> String.split("\n") |> hd(), else: nil
+metadata = %{target: target, triple: triple, libc: libc,
+  build_image: System.get_env("ImageOS"), build_image_version: System.get_env("ImageVersion"), source_commit: System.get_env("GITHUB_SHA"),
+  ci_run: System.get_env("GITHUB_RUN_ID"), ci_attempt: System.get_env("GITHUB_RUN_ATTEMPT"),
+  source_sha256: Mix.Tasks.Compile.EgglogNative.source_fingerprint(),
+  sha256: :crypto.hash(:sha256, File.read!(file)) |> Base.encode16(case: :lower),
+  toolchain: toolchain, build_os: inspect(:os.type()), build_os_version: inspect(:os.version()),
+  rustflags: System.get_env("RUSTFLAGS"), deployment_target: System.get_env("MACOSX_DEPLOYMENT_TARGET"), otp: to_string(:erlang.system_info(:otp_release)),
+  runtime_nif_version: to_string(:erlang.system_info(:nif_version))}
+File.write!(file <> ".json", JSON.encode!(metadata) <> "\n")
+' "$archive" "$target" "$triple"
+printf 'Built %s (%s)\nEGGLOG_NATIVE_ARCHIVE=%s\nEGGLOG_NATIVE_STAGE=%s\n' "$target" "$triple" "$archive" "$stage/native"

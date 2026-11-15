@@ -39,6 +39,7 @@ defmodule EgglogElixir.MixProject do
         "KNOWN_ISSUES.md",
         "egglog_elixir_improvements.md",
         "MULTIPLATFORM.md",
+        "MAINTAINING.md",
         "livebooks/README.md",
         "livebooks/egglog-tutorial/LICENSE-UPSTREAM.md",
         "livebooks/index.livemd",
@@ -72,7 +73,8 @@ defmodule EgglogElixir.MixProject do
         "KNOWN_ISSUES.md",
         "egglog_elixir_improvements.md",
         "MULTIPLATFORM.md",
-        "native/precompiled",
+        "MAINTAINING.md",
+        "native/manifest.json",
         "LICENSE",
         "README.md",
         "lib",
@@ -92,13 +94,19 @@ defmodule Mix.Tasks.Compile.EgglogNative do
   use Mix.Task.Compiler
 
   def run(_) do
-    if Application.get_env(:egglog_elixir, :build_from_source, false) or
-         System.get_env("EGGLOG_BUILD") in ["1", "true"] or
-         System.get_env("RUSTLER_PRECOMPILED_FORCE_BUILD_ALL") in ["1", "true"] do
-      {output, status} = System.cmd("bash", ["scripts/build_native.sh"], stderr_to_stdout: true)
-      if status != 0, do: Mix.raise(output)
-      Mix.shell().info(output)
-    end
+    built =
+      if Application.get_env(:egglog_elixir, :build_from_source, false) or
+           System.get_env("EGGLOG_BUILD") in ["1", "true"] or
+           System.get_env("RUSTLER_PRECOMPILED_FORCE_BUILD_ALL") in ["1", "true"] do
+        {output, status} = System.cmd("bash", ["scripts/build_native.sh"], stderr_to_stdout: true)
+        Mix.shell().info(output)
+        if status != 0, do: Mix.raise("Egglog source build failed")
+
+        case Regex.run(~r/^EGGLOG_NATIVE_ARCHIVE=(.+)$/m, output) do
+          [_, path] -> path
+          _ -> Mix.raise("Source build did not report its archive")
+        end
+      end
 
     if :erlang.system_info(:wordsize) != 8,
       do: Mix.raise("egglog_elixir requires a 64-bit Erlang runtime")
@@ -112,20 +120,17 @@ defmodule Mix.Tasks.Compile.EgglogNative do
 
     target = target(os, arch)
 
-    archive =
-      System.get_env("EGGLOG_ELIXIR_BUNDLE") ||
-        "native/precompiled/egglog-#{Mix.Project.config()[:version]}-#{target}.tar.gz"
-
-    unless File.regular?(archive),
-      do:
-        Mix.raise(
-          "Missing #{target} Egglog bundle. See MULTIPLATFORM.md; EGGLOG_BUILD=1 enables a local Rust build."
-        )
-
     {:ok, _} = Application.ensure_all_started(:crypto)
-    expected = File.read!(archive <> ".sha256") |> String.trim()
-    actual = :crypto.hash(:sha256, File.read!(archive)) |> Base.encode16(case: :lower)
-    if actual != expected, do: Mix.raise("Egglog native archive checksum mismatch")
+
+    {archive, expected} =
+      case built || System.get_env("EGGLOG_ELIXIR_BUNDLE") do
+        nil -> release_bundle(target)
+        path -> {path, File.read!(path <> ".sha256") |> String.trim()}
+      end
+
+    unless valid_archive?(archive, expected),
+      do: Mix.raise("Egglog native archive checksum mismatch")
+
     extension = if os == {:win32, :nt}, do: "dll", else: "so"
     filename = "egglog_nif.#{extension}"
     files = [filename] ++ if(os == {:unix, :linux}, do: ["egglog_libgcc_s.so.1"], else: [])
@@ -197,6 +202,124 @@ defmodule Mix.Tasks.Compile.EgglogNative do
            do: File.cp_r!("priv", app_priv)
 
     {:ok, []}
+  end
+
+  def source_fingerprint do
+    paths =
+      Enum.sort(
+        Path.wildcard("native/egglog_nif/src/**/*.rs") ++
+          ["native/egglog_nif/Cargo.toml", "native/egglog_nif/Cargo.lock"]
+      )
+
+    :crypto.hash(:sha256, Enum.map(paths, &[&1, <<0>>, File.read!(&1), <<0>>]))
+    |> Base.encode16(case: :lower)
+  end
+
+  defp valid_archive?(path, expected) do
+    case File.read(path) do
+      {:ok, data} -> Base.encode16(:crypto.hash(:sha256, data), case: :lower) == expected
+      _ -> false
+    end
+  end
+
+  defp release_bundle(target) do
+    manifest = "native/manifest.json" |> File.read!() |> JSON.decode!()
+
+    unless manifest["schema"] == 1 and manifest["source_sha256"] == source_fingerprint(),
+      do: Mix.raise("Native sources do not match the artifact manifest; use EGGLOG_BUILD=1")
+
+    artifact =
+      manifest["artifacts"][target] ||
+        Mix.raise(
+          "No reviewed release artifact for #{target}; use EGGLOG_BUILD=1. See MULTIPLATFORM.md"
+        )
+
+    %{"file" => file, "sha256" => hash} = artifact
+
+    unless Path.basename(file) == file and Regex.match?(~r/^[a-f0-9]{64}$/, hash),
+      do: Mix.raise("Invalid Egglog artifact manifest")
+
+    cache =
+      System.get_env("EGGLOG_CACHE_DIR") ||
+        to_string(:filename.basedir(:user_cache, ~c"egglog_elixir"))
+
+    path = Path.join([cache, hash, file])
+
+    unless valid_archive?(path, hash) do
+      base =
+        System.get_env("EGGLOG_RELEASE_BASE_URL") ||
+          "https://github.com/davfuenmayor/egglog_elixir/releases/download"
+
+      url = String.trim_trailing(base, "/") <> "/" <> manifest["release"] <> "/" <> file
+      download_archive!(url, path, hash)
+    end
+
+    {path, hash}
+  end
+
+  defp download_archive!(url, path, hash) do
+    uri = URI.parse(url)
+
+    unless uri.scheme == "https" or
+             (uri.scheme == "http" and uri.host in ["127.0.0.1", "localhost"]),
+           do: Mix.raise("Artifact downloads require HTTPS")
+
+    {:ok, _} = Application.ensure_all_started(:inets)
+    {:ok, _} = Application.ensure_all_started(:ssl)
+
+    ssl = [
+      verify: :verify_peer,
+      cacerts: :public_key.cacerts_get(),
+      customize_hostname_check: [match_fun: :public_key.pkix_verify_hostname_match_fun(:https)]
+    ]
+
+    data =
+      case :httpc.request(
+             :get,
+             {String.to_charlist(url), []},
+             [ssl: ssl, timeout: 60_000, connect_timeout: 10_000],
+             body_format: :binary
+           ) do
+        {:ok, {{_, 200, _}, _, data}} ->
+          data
+
+        result ->
+          Mix.raise(
+            "Cannot download reviewed Egglog artifact #{url}: #{inspect(result)}. " <>
+              "Publish matching release assets or use EGGLOG_ELIXIR_BUNDLE / EGGLOG_BUILD=1"
+          )
+      end
+
+    unless Base.encode16(:crypto.hash(:sha256, data), case: :lower) == hash,
+      do: Mix.raise("Downloaded Egglog archive checksum mismatch")
+
+    File.mkdir_p!(Path.dirname(path))
+    temporary = path <> ".#{System.pid()}.#{System.unique_integer([:positive])}.tmp"
+
+    try do
+      File.write!(temporary, data, [:exclusive])
+
+      case File.rename(temporary, path) do
+        :ok ->
+          :ok
+
+        {:error, reason} ->
+          unless valid_archive?(path, hash) do
+            File.rm(path)
+
+            case File.rename(temporary, path) do
+              :ok ->
+                :ok
+
+              {:error, _} ->
+                unless valid_archive?(path, hash),
+                  do: Mix.raise("Cannot cache archive: #{inspect(reason)}")
+            end
+          end
+      end
+    after
+      File.rm(temporary)
+    end
   end
 
   def clean do

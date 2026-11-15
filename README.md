@@ -15,9 +15,10 @@ Requires Elixir 1.19+ and 64-bit Erlang/OTP 27+. Add this checkout to `mix.exs`:
 {:egglog_elixir, path: "../egglog_elixir"}
 ```
 
-Checksum-verified NIF bundles cover Linux x86-64/ARM64 (glibc) and Windows x86-64;
-normal installation needs no Rust toolchain. macOS requires a source build;
-musl/Alpine is unsupported. See [platform status](MULTIPLATFORM.md).
+Native archives are verified against `native/manifest.json` and cached outside
+Git/Hex. Release migration is pending: until matching assets are published, fresh
+machines need `EGGLOG_ELIXIR_BUNDLE` or a source build. Mac artifacts still need
+native CI validation. See [platform status](MULTIPLATFORM.md).
 
 ```sh
 mix deps.get
@@ -30,7 +31,7 @@ Windows: use `~/.mix/escripts/livebook.bat` from PowerShell. Choose the default
 Standalone runtime. First notebook installation needs network access.
 
 For source builds, use `EGGLOG_BUILD=1 mix compile` with Rust/Cargo 1.91+ and a
-linker. `scripts/build_native.sh` builds bundles; `EGGLOG_TARGET` selects a target.
+linker. `scripts/build_native.sh` builds outside the checkout; `EGGLOG_TARGET` selects a target.
 `EGGLOG_ELIXIR_BUNDLE` selects an external archive with its `.sha256` sidecar.
 Restart the runtime after replacing a NIF. Build/release procedures and coverage
 are in [MULTIPLATFORM.md](MULTIPLATFORM.md).
@@ -161,4 +162,4 @@ and layout can vary across runs; counts alone do not establish graph equivalence
 ## Reference
 
 [API coverage](API_COVERAGE.md) · [Known issues](KNOWN_ISSUES.md) ·
-[Changelog](CHANGELOG.md) · [Upstream](https://github.com/egraphs-good/egglog)
+[Changelog](CHANGELOG.md) · [Maintainer guide](MAINTAINING.md) · [Upstream](https://github.com/egraphs-good/egglog)

@@ -1,0 +1,19 @@
+{
+  "schema": 1,
+  "release": "v0.2.0",
+  "source_sha256": "696f8c0abafa838b9f08cc588f1342f1f74b9d2c29ad69a3f26812c1b89c0c2b",
+  "artifacts": {
+    "linux-x86_64": {
+      "file": "egglog-0.2.0-linux-x86_64.tar.gz",
+      "sha256": "f07be4c6c7a1023e1040371eb125772a48f4d60afbbfde3706d584f3a766dd9a"
+    },
+    "linux-aarch64": {
+      "file": "egglog-0.2.0-linux-aarch64.tar.gz",
+      "sha256": "22d241703656f0b8296f8659e102a2d8b892fb4baf32e9ed834ed442c6651631"
+    },
+    "windows-x86_64": {
+      "file": "egglog-0.2.0-windows-x86_64.tar.gz",
+      "sha256": "4943459593687f0dc17b9adf3b1faaec65d218bc002ba619144e6d8aedb05134"
+    }
+  }
+}

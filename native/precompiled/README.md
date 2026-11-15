@@ -1,3 +1,3 @@
-# Native bundles
+# Native artifacts
 
-Build with `scripts/build_native.sh` (`EGGLOG_TARGET` selects a target). Keep each archive and SHA-256 sidecar together; exclude intermediates/logs. See [platform validation](../../MULTIPLATFORM.md).
+Binaries are not stored here. Build into the external cache with `scripts/build_native.sh`; review checksums in `../manifest.json`. See [release procedure](../../MULTIPLATFORM.md).

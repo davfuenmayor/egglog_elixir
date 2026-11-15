@@ -2,6 +2,7 @@ defmodule Egglog.NativeBundleTest do
   use ExUnit.Case, async: false
 
   @root Path.expand("..", __DIR__)
+  @version Mix.Project.config()[:version]
   @compiler Mix.Tasks.Compile.EgglogNative
 
   test "selects only supported 64-bit native targets" do
@@ -28,7 +29,7 @@ defmodule Egglog.NativeBundleTest do
 
   @tag :tmp_dir
   test "installed app works after relocation in a fresh VM", %{tmp_dir: dir} do
-    app = Path.join([dir, "moved app", "egglog_elixir-0.2.0"])
+    app = Path.join([dir, "moved app", "egglog_elixir-#{@version}"])
     jason = Path.join([dir, "moved app", "jason"])
     File.mkdir_p!(Path.join(app, "priv"))
     File.mkdir_p!(jason)
@@ -138,6 +139,139 @@ defmodule Egglog.NativeBundleTest do
     refute File.exists?(Path.join(dir, "priv/native"))
   end
 
+  @tag :tmp_dir
+  test "downloads a trusted release, reuses cache offline and repairs corruption", %{tmp_dir: dir} do
+    {archive, manifest} = release_fixture(dir)
+    data = File.read!(archive)
+    {url, listener} = serve(data)
+    on_exit(fn -> :gen_tcp.close(listener) end)
+
+    env = [
+      {"EGGLOG_ELIXIR_BUNDLE", nil},
+      {"EGGLOG_CACHE_DIR", Path.join(dir, "cache")},
+      {"EGGLOG_RELEASE_BASE_URL", url}
+    ]
+
+    assert {_, 0} = install(dir, env)
+    assert_received :download
+    assert {_, 0} = install(dir, env)
+    refute_received :download
+    item = manifest["artifacts"][target()]
+    cached = Path.join([dir, "cache", item["sha256"], item["file"]])
+    File.write!(cached, "corrupt")
+    assert {_, 0} = install(dir, env)
+    assert_received :download
+    assert File.read!(cached) == data
+    :gen_tcp.close(listener)
+    assert {_, 0} = install(dir, env)
+  end
+
+  @tag :tmp_dir
+  test "concurrent cold downloads install one verified cache entry", %{tmp_dir: dir} do
+    {archive, manifest} = release_fixture(dir)
+    {url, listener} = serve(File.read!(archive))
+    on_exit(fn -> :gen_tcp.close(listener) end)
+
+    env = [
+      {"EGGLOG_ELIXIR_BUNDLE", nil},
+      {"EGGLOG_CACHE_DIR", Path.join(dir, "cache")},
+      {"EGGLOG_RELEASE_BASE_URL", url}
+    ]
+
+    1..3
+    |> Task.async_stream(fn _ -> install(dir, env) end, timeout: 30_000)
+    |> Enum.each(fn result -> assert {:ok, {_, 0}} = result end)
+
+    item = manifest["artifacts"][target()]
+
+    assert File.read!(Path.join([dir, "cache", item["sha256"], item["file"]])) ==
+             File.read!(archive)
+
+    assert Path.wildcard(Path.join(dir, "cache/**/*.tmp")) == []
+  end
+
+  @tag :tmp_dir
+  test "rejects a corrupt download and changed native sources", %{tmp_dir: dir} do
+    release_fixture(dir)
+    {url, listener} = serve("not the reviewed archive")
+    on_exit(fn -> :gen_tcp.close(listener) end)
+
+    env = [
+      {"EGGLOG_ELIXIR_BUNDLE", nil},
+      {"EGGLOG_CACHE_DIR", Path.join(dir, "cache")},
+      {"EGGLOG_RELEASE_BASE_URL", url}
+    ]
+
+    assert {output, status} = install(dir, env)
+    assert status != 0
+    assert output =~ "checksum mismatch"
+    refute File.exists?(Path.join(dir, "priv/native"))
+    assert_received :download
+    File.write!(Path.join(dir, "native/egglog_nif/Cargo.toml"), "changed")
+    assert {output, status} = install(dir, env)
+    assert status != 0
+    assert output =~ "Native sources do not match"
+    refute_received :download
+  end
+
+  defp release_fixture(dir) do
+    archive = project(dir)
+    bundle(archive, target())
+
+    File.mkdir_p!(Path.join(dir, "native/egglog_nif"))
+
+    for name <- ["src", "Cargo.toml", "Cargo.lock"] do
+      File.cp_r!(
+        Path.join([@root, "native/egglog_nif", name]),
+        Path.join([dir, "native/egglog_nif", name])
+      )
+    end
+
+    manifest = "native/manifest.json" |> File.read!() |> JSON.decode!()
+
+    item = %{
+      "file" => Path.basename(archive),
+      "sha256" => String.trim(File.read!(archive <> ".sha256"))
+    }
+
+    manifest =
+      manifest
+      |> Map.put("artifacts", %{target() => item})
+      |> Map.put("source_sha256", @compiler.source_fingerprint())
+
+    File.write!(Path.join(dir, "native/manifest.json"), JSON.encode!(manifest))
+    {archive, manifest}
+  end
+
+  defp serve(data) do
+    {:ok, listener} =
+      :gen_tcp.listen(0, [:binary, active: false, reuseaddr: true, ip: {127, 0, 0, 1}])
+
+    {:ok, port} = :inet.port(listener)
+    parent = self()
+    spawn(fn -> serve_next(listener, data, parent) end)
+    {"http://127.0.0.1:#{port}", listener}
+  end
+
+  defp serve_next(listener, data, parent) do
+    case :gen_tcp.accept(listener) do
+      {:ok, socket} ->
+        {:ok, _request} = :gen_tcp.recv(socket, 0, 5000)
+        send(parent, :download)
+
+        :gen_tcp.send(socket, [
+          "HTTP/1.1 200 OK\r\nContent-Length: #{byte_size(data)}\r\nConnection: close\r\n\r\n",
+          data
+        ])
+
+        :gen_tcp.close(socket)
+        serve_next(listener, data, parent)
+
+      {:error, :closed} ->
+        :ok
+    end
+  end
+
   defp target do
     arch =
       if :os.type() == {:win32, :nt},
@@ -151,7 +285,7 @@ defmodule Egglog.NativeBundleTest do
 
   defp project(dir) do
     File.cp!(Path.join(@root, "mix.exs"), Path.join(dir, "mix.exs"))
-    archive = Path.join(dir, "native/precompiled/egglog-0.2.0-#{target()}.tar.gz")
+    archive = Path.join(dir, "native/precompiled/egglog-#{@version}-#{target()}.tar.gz")
     File.mkdir_p!(Path.dirname(archive))
     archive
   end
@@ -178,18 +312,25 @@ defmodule Egglog.NativeBundleTest do
     File.write!(archive <> ".sha256", hash <> "\n")
   end
 
-  defp install(dir) do
+  defp install(dir, extra_env \\ []) do
     code = "Mix.start(); Code.require_file(\"mix.exs\"); Mix.Tasks.Compile.EgglogNative.run([])"
 
     System.cmd(System.find_executable("elixir"), ["--erl", "+S 1:1", "-e", code],
       cd: dir,
       stderr_to_stdout: true,
-      env: [
-        {"MIX_ENV", "dev"},
-        {"EGGLOG_BUILD", nil},
-        {"EGGLOG_ELIXIR_BUNDLE", nil},
-        {"RUSTLER_PRECOMPILED_FORCE_BUILD_ALL", nil}
-      ]
+      env:
+        Map.to_list(
+          Map.merge(
+            Map.new([
+              {"MIX_ENV", "dev"},
+              {"EGGLOG_BUILD", nil},
+              {"EGGLOG_ELIXIR_BUNDLE",
+               Path.join(dir, "native/precompiled/egglog-#{@version}-#{target()}.tar.gz")},
+              {"RUSTLER_PRECOMPILED_FORCE_BUILD_ALL", nil}
+            ]),
+            Map.new(extra_env)
+          )
+        )
     )
   end
 end

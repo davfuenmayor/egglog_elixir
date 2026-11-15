@@ -23,16 +23,32 @@ unless run!.("git", ["rev-parse", "HEAD"]) ==
          run!.("git", ["rev-parse", "refs/tags/#{tag}^{commit}"]),
        do: raise("The release tag #{tag} must point to the current source commit.")
 
+manifest = "native/manifest.json" |> File.read!() |> JSON.decode!()
+required = ~w(linux-x86_64 linux-aarch64 windows-x86_64 macos-x86_64 macos-aarch64)
+
+unless Enum.sort(Map.keys(manifest["artifacts"])) == Enum.sort(required),
+  do: raise("Review artifacts for the complete five-target matrix before preparing a release")
+
+unless manifest["source_sha256"] == Mix.Tasks.Compile.EgglogNative.source_fingerprint() and
+         manifest["release"] == tag,
+       do: raise("Release manifest does not match tagged native source/version")
+
+directory = System.fetch_env!("EGGLOG_ARTIFACT_DIR")
+
 archives =
-  Path.wildcard("native/precompiled/egglog-#{version}-*.tar.gz")
-  |> Enum.map(fn path ->
-    expected = File.read!(path <> ".sha256") |> String.trim()
+  Enum.map(required, fn target ->
+    artifact = manifest["artifacts"][target]
+    path = Path.join(directory, artifact["file"])
     actual = :crypto.hash(:sha256, File.read!(path)) |> Base.encode16(case: :lower)
-    unless actual == expected, do: raise("Artifact checksum mismatch: #{path}")
+    unless actual == artifact["sha256"], do: raise("Artifact checksum mismatch: #{path}")
+    metadata = (path <> ".json") |> File.read!() |> JSON.decode!()
+    unless metadata == artifact["build"], do: raise("Artifact build provenance mismatch")
+
+    unless String.trim(File.read!(path <> ".sha256")) == actual,
+      do: raise("Sidecar checksum mismatch")
+
     path
   end)
-
-if archives == [], do: raise("Package native artifacts before publishing.")
 
 repo = "davfuenmayor/egglog_elixir"
 
@@ -46,7 +62,7 @@ File.mkdir_p!("dist")
 
 File.write!(
   notes,
-  "Egglog Elixir #{version}\n\nThin bindings for egglog 3.0.0. See CHANGELOG.md and API_COVERAGE.md at this tag.\n"
+  "Egglog Elixir #{version}\n\nNative egglog bindings. See CHANGELOG.md and API_COVERAGE.md at this tag.\n"
 )
 
 run!.(
@@ -57,12 +73,15 @@ run!.(
     tag,
     "--repo",
     repo,
+    "--draft",
     "--verify-tag",
     "--title",
     "Egglog Elixir #{version}",
     "--notes-file",
     notes
-  ] ++ Enum.flat_map(archives, &[&1, &1 <> ".sha256"])
+  ] ++ Enum.flat_map(archives, &[&1, &1 <> ".sha256", &1 <> ".json"])
 )
 
-IO.puts("Published #{repo} release #{tag} with verified native artifacts.")
+IO.puts(
+  "Prepared draft #{repo} release #{tag}. Review assets and enable release immutability before publishing; publish Hex only after verified anonymous downloads work."
+)
