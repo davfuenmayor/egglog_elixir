@@ -96,10 +96,12 @@ defmodule Egglog.ParseErrorTest do
            }
   end
 
-  test "included-file parser errors retain the filename and file-relative offsets" do
-    path = Path.join(System.tmp_dir!(), "egglog-parse-#{System.unique_integer([:positive])}.egg")
+  @tag :tmp_dir
+  test "included-file parser errors retain the filename and file-relative offsets", %{
+    tmp_dir: dir
+  } do
+    path = Path.join(dir, "invalid.egg")
     File.write!(path, @source)
-    on_exit(fn -> File.rm!(path) end)
     source = "(include #{inspect(path)})"
     expected = %{@location | file: path}
 

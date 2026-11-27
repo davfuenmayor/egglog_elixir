@@ -107,7 +107,7 @@ defmodule Egglog.NativeApiTest do
     end)
   end
 
-  test "native thread configuration belongs to each graph and is inherited by program clones" do
+  test "native thread configuration is independent for each graph and program" do
     EGraph.with_egraph(
       fn graph ->
         EGraph.with_egraph(fn other ->

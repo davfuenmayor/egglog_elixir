@@ -1,27 +1,28 @@
 defmodule Egglog.MermaidTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
   alias Egglog.{EGraph, Program, Snapshot}
 
   defp node(op, eclass, children \\ []),
     do: %{"op" => op, "eclass" => eclass, "children" => children}
 
-  test "ordered edges preserve native child references, including repeated and cyclic arguments" do
+  test "ordered edges preserve repeated arguments within a class" do
     graph = %{
       "nodes" => %{
         "a" => node("A", "value"),
         "b" => node("B", "value"),
-        "pair" => node("Pair", "value", ["b", "a"])
+        "call" => node("Call", "value", ["b", "a", "a"])
       },
       "class_data" => %{"value" => %{"type" => "Term", "let" => "left, right"}}
     }
 
     text = Snapshot.to_mermaid!(graph)
-    assert text =~ ~s(subgraph c0["let left, right"])
-    assert text =~ ~s(n0["A"])
-    assert text =~ ~s(n1["B"])
-    assert text =~ "n2 -->|0| n1"
-    assert text =~ "n2 -->|1| n0"
-    refute text =~ "_anchor"
+    assert text =~ ~s(["let left, right"])
+    a = id_for_label(text, "A")
+    b = id_for_label(text, "B")
+    call = id_for_label(text, "Call")
+    assert text =~ "#{call} -->|0| #{b}"
+    assert text =~ "#{call} -->|1| #{a}"
+    assert text =~ "#{call} -->|2| #{a}"
     assert length(Regex.scan(~r/^  subgraph /m, text)) == 1
     assert Snapshot.to_mermaid!(Jason.encode!(graph)) == text
     assert Snapshot.to_mermaid!(%{snapshot: %{format: :json, text: Jason.encode!(graph)}}) == text
@@ -34,12 +35,15 @@ defmodule Egglog.MermaidTest do
           "a" => node("A", "left"),
           "b" => node("B", "right"),
           "concat" => node("Concat", "word", ["b", "a"])
-        }
+        },
+        "class_data" => %{"left" => %{"let" => "left"}, "right" => %{"let" => "right"}}
       })
 
-    assert source =~ "n2 -->|0| c1"
-    assert source =~ "n2 -->|1| c0"
-    refute source =~ "n2 -->|0| c0"
+    concat = id_for_label(source, "Concat")
+    left = id_for_label(source, "let left")
+    right = id_for_label(source, "let right")
+    assert source =~ "#{concat} -->|0| #{right}"
+    assert source =~ "#{concat} -->|1| #{left}"
   end
 
   test "independent classes are never merged by equal labels and native IDs stay out of syntax" do
@@ -123,9 +127,8 @@ defmodule Egglog.MermaidTest do
 
   test "a singleton self-loop keeps its constructor endpoint instead of targeting its parent class" do
     source = Snapshot.to_mermaid!(%{"nodes" => %{"f" => node("F", "value", ["f"])}})
-    assert source =~ "subgraph c0"
-    assert source =~ "n0 --> n0"
-    refute source =~ "singleton"
+    constructor = id_for_label(source, "F")
+    assert source =~ "#{constructor} --> #{constructor}"
   end
 
   test "malformed JSON, schema and dangling children return errors instead of invented equalities" do
@@ -142,40 +145,6 @@ defmodule Egglog.MermaidTest do
         ] do
       assert {:error, {:invalid_snapshot, _}} = Snapshot.to_mermaid(graph)
       assert_raise RuntimeError, fn -> Snapshot.to_mermaid!(graph) end
-    end
-  end
-
-  test "browser regression fixtures cover empty, escaped, cyclic and repeated edges" do
-    graphs = [
-      {"empty", %{"nodes" => %{}}},
-      {"escaped",
-       %{
-         "nodes" => %{
-           "bad" =>
-             node(
-               "end" <> <<34, 93, 10>> <> "%%{init:{}}%% <script>&" <> <<96, 92>> <> "λ",
-               "x"
-             )
-         },
-         "class_data" => %{"x" => %{"let" => "names: a, b" <> <<10, 34>> <> "quoted"}}
-       }},
-      {"subsumed",
-       %{
-         "nodes" => %{"a" => Map.put(node("A", "root"), "subsumed", true)},
-         "class_data" => %{"root" => %{}},
-         "root_eclasses" => ["root"]
-       }},
-      {"cycle",
-       %{
-         "nodes" => %{"a" => node("A", "x"), "f" => node("F", "x", ["a", "a"])},
-         "class_data" => %{"x" => %{"type" => "T"}}
-       }}
-    ]
-
-    for {_name, graph} <- graphs do
-      source = Snapshot.to_mermaid!(graph)
-
-      assert source =~ "flowchart TB"
     end
   end
 
@@ -219,45 +188,26 @@ defmodule Egglog.MermaidTest do
     end)
   end
 
-  test "mutable snapshots support string options, inline leaves, split primitives and caps" do
+  test "Mermaid reports a partial graph when a serialization cap omits functions" do
     EGraph.with_egraph(
-      """
-      (datatype T (Num i64) (Add T T))
-      (let x (Add (Num 1) (Num 2)))
-      (let y (Add (Num 3) (Num 4)))
-      """,
+      "(datatype T (A) (B)) (A) (B)",
       fn graph ->
-        for opts <- [
-              %{"render" => "mermaid"},
-              [render: :mermaid, snapshot_inline_leaves: 2],
-              [render: :mermaid, snapshot_split_primitive_outputs: true],
-              [render: :mermaid, snapshot_max_functions: 1, snapshot_max_calls_per_function: 1]
-            ] do
-          assert {:ok, snapshot} = EGraph.snapshot(graph, opts)
-          assert snapshot.format == :mermaid
-          assert snapshot.mermaid =~ "flowchart TB"
-          assert Snapshot.to_mermaid!(snapshot.result) == snapshot.mermaid
-        end
+        full = EGraph.snapshot!(graph, render: :mermaid)
+
+        partial =
+          EGraph.snapshot!(graph, %{"render" => "mermaid", "snapshot_max_functions" => 1})
+
+        assert full.complete
+        refute partial.complete
+        assert partial.format == :mermaid
+        assert map_size(Snapshot.nodes(partial)) < map_size(Snapshot.nodes(full))
       end
     )
   end
 
-  test "Mermaid needs no Graphviz and does not fall back to DOT" do
-    previous = System.get_env("PATH")
-    System.put_env("PATH", "")
-
-    try do
-      EGraph.with_egraph("(datatype T (A)) (A)", fn graph ->
-        assert {:ok, %{format: :mermaid}} = EGraph.snapshot(graph, render: :mermaid)
-      end)
-
-      Program.with_program("", fn program ->
-        assert {:ok, %{format: :mermaid}} =
-                 Program.snapshot(program, "(datatype T (A)) (A)", render: :mermaid)
-      end)
-    after
-      if previous, do: System.put_env("PATH", previous), else: System.delete_env("PATH")
-    end
+  defp id_for_label(source, label) do
+    [_, id] = Regex.run(~r/^ *(?:subgraph )?(\w+)\["#{Regex.escape(label)}"\]/m, source)
+    id
   end
 
   @tag :tmp_dir

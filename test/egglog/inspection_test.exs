@@ -17,7 +17,7 @@ defmodule Egglog.InspectionTest do
     EGraph.with_egraph(@theory, fn graph ->
       before = EGraph.num_tuples(graph)
 
-      assert %{truncated: true, rows: [%{output: %{sort: "@seenSort", type: :value}}]} =
+      assert %{truncated: true, rows: [%{inputs: [%{sort: "i64"}], output: %{type: :value}}]} =
                EGraph.rows!(graph, "seen", limit: 1)
 
       assert %{truncated: false, rows: [_, _]} = EGraph.rows!(graph, "seen", limit: 2)

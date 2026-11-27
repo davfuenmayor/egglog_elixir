@@ -11,13 +11,10 @@ defmodule Egglog.Program.StepTest do
     replay = Step.next(initial, "(seen 1)\n(extract 1)", render: :json)
 
     assert initial.snapshot == nil
-    assert first.source == replay.source
     assert Egglog.Output.texts(first.snapshot.result) == ["1"]
+    assert Egglog.Output.texts(replay.snapshot.result) == ["1"]
     assert Egglog.Output.texts(second.snapshot.result) == ["2"]
-    assert branch.snapshot.format == :json
-    assert second.source != branch.source
-    assert is_binary(first.snapshot.json)
-    refute inspect(second) =~ "(seen"
+    assert Egglog.Output.texts(branch.snapshot.result) == []
   end
 
   test "native push/pop history survives step reconstruction" do

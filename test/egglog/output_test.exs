@@ -31,11 +31,7 @@ defmodule Egglog.OutputTest do
         (extract 42)
         """)
 
-      printed = capture_io(fn -> Output.print(result) end)
-      assert printed =~ "42"
-      refute printed =~ "check succeeded:"
-      refute printed =~ "expected failure observed:"
-      refute printed =~ "only a comment"
+      assert capture_io(fn -> Output.print(result) end) == "42\n"
     end)
   end
 end

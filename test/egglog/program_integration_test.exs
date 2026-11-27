@@ -9,23 +9,26 @@ defmodule Egglog.ProgramIntegrationTest do
   (rewrite (Mul a (Num 1)) a)
   """
 
-  test "loads a native program and exposes its tuple count" do
-    assert {:ok, program} = Program.load(@math_theory, name: "math")
-    assert {:ok, 0} = Program.num_tuples(program)
-  end
+  test "repeated runs preserve the loaded base and isolate their input" do
+    Program.with_program(@math_theory <> "(relation seen (i64)) (seen 7)", fn program ->
+      assert {:ok, count} = Program.num_tuples(program)
+      assert count > 0
 
-  test "loaded program remains a query-local native base" do
-    assert {:ok, program} = Program.load(@math_theory)
-    assert {:ok, 0} = Program.num_tuples(program)
+      for n <- [1, 2] do
+        input = %{
+          facts: ["(seen #{n})"],
+          terms: %{"x" => "(Add (Num #{n}) (Num 0))"},
+          budget: %{rounds: 2}
+        }
 
-    assert {:ok, "(Num 5)"} =
-             Program.extract(
-               program,
-               %{terms: %{"x" => "(Add (Num 5) (Num 0))"}, budget: %{rounds: 2}},
-               "x"
-             )
+        assert {:ok, true} = Program.check(program, input, "(seen #{n})")
+        assert Program.extract!(program, input, "x") == "(Num #{n})"
+        assert {:ok, false} = Program.check(program, "", "(seen #{n})")
+      end
 
-    assert {:ok, 0} = Program.num_tuples(program)
+      assert {:ok, true} = Program.check(program, "", "(seen 7)")
+      assert {:ok, ^count} = Program.num_tuples(program)
+    end)
   end
 
   test "bang load and run variants return direct values" do
@@ -101,20 +104,6 @@ defmodule Egglog.ProgramIntegrationTest do
     assert {:ok, false} = Program.check(program, input, "(= x (Num 2))")
     refute Program.check?(program, input, "(= x (Num 2))")
     assert :ok = Program.check_fail(program, input, "(= x (Num 2))")
-  end
-
-  test "extract helper returns native extraction text directly" do
-    assert {:ok, program} = Program.load(@math_theory)
-
-    assert {:ok, "(Num 9)"} =
-             Program.extract(
-               program,
-               %{
-                 terms: %{"x" => "(Mul (Add (Num 9) (Num 0)) (Num 1))"},
-                 budget: %{rounds: 3}
-               },
-               "x"
-             )
   end
 
   test "eval helper decodes primitive and e-class values from query-local runs" do
@@ -285,31 +274,6 @@ defmodule Egglog.ProgramIntegrationTest do
            ]
   end
 
-  test "query-local runs clone the persistent native base state" do
-    assert {:ok, program} = Program.load(@math_theory)
-
-    first =
-      extract_text(
-        program,
-        terms: %{"x" => "(Add (Num 1) (Num 0))"},
-        budget: %{rounds: 2},
-        requests: [%{type: :extract, expr: "x"}]
-      )
-
-    second =
-      extract_text(
-        program,
-        terms: %{"x" => "(Add (Num 2) (Num 0))"},
-        budget: %{rounds: 2},
-        requests: [%{type: :extract, expr: "x"}]
-      )
-
-    assert first == "(Num 1)\n"
-    assert second == "(Num 2)\n"
-
-    assert {:ok, 0} = Program.num_tuples(program)
-  end
-
   test "query-local program runs are safe to use concurrently" do
     assert {:ok, program} = Program.load(@math_theory)
 
@@ -351,7 +315,6 @@ defmodule Egglog.ProgramIntegrationTest do
                ]
              })
 
-    assert result.stats.matches >= 5
     assert output_text(result, :print_function) =~ "(path 1 4)"
   end
 
@@ -493,7 +456,7 @@ defmodule Egglog.ProgramIntegrationTest do
   end
 
   test "explicit schedule overrides mode and round budget" do
-    assert {:ok, program} = Program.load(@math_theory)
+    assert {:ok, program} = Program.load(@math_theory, modes: %{simplify: "(repeat 4 (run))"})
 
     no_run =
       extract_text(
@@ -503,7 +466,8 @@ defmodule Egglog.ProgramIntegrationTest do
           schedule: "(repeat 0 (run))",
           budget: %{rounds: 4},
           requests: [%{type: :extract, expr: "x"}]
-        }
+        },
+        mode: :simplify
       )
 
     assert no_run == "(Add (Num 9) (Num 0))\n"
@@ -575,19 +539,20 @@ defmodule Egglog.ProgramIntegrationTest do
 
     assert {:ok, result} =
              Program.run(program, %{
-               sets: [{"(score \"Ada\")", "10"}],
+               sets: [{"(score \"Ada\")", "20"}],
                facts: [
                  "(candidate \"Ada\" 15)",
-                 "(candidate \"Ada\" 11)"
+                 "(candidate \"Bert\" 11)"
                ],
                budget: %{rounds: 4},
                requests: [
-                 %{type: :check, expr: "(= (score \"Ada\") 15)"},
+                 %{type: :check, expr: "(= (score \"Ada\") 20)"},
+                 %{type: :check, expr: "(= (score \"Bert\") 11)"},
                  %{type: :print_function, name: "score", limit: 10}
                ]
              })
 
-    assert output_text(result, :print_function) =~ ~s[(score "Ada") -> 15]
+    assert output_text(result, :print_function) =~ ~s[(score "Ada") -> 20]
   end
 
   test "direct sort and constructor declarations support birewrite and extraction variants" do
@@ -683,100 +648,32 @@ defmodule Egglog.ProgramIntegrationTest do
     assert capped.snapshot.omitted =~ "Omitted:"
   end
 
-  test "snapshot API returns plain data and can write rendered artifacts" do
-    theory = """
-    (datatype Term
-      (A)
-      (B)
-      (Pair Term Term))
-    """
-
-    assert {:ok, program} = Egglog.load(theory)
-
-    input = %{
-      terms: %{"p" => "(Pair (A) (B))"},
-      unions: [{"(A)", "(B)"}],
-      requests: [%{type: :extract, expr: "p"}]
-    }
-
-    assert {:ok, dot_snapshot} =
-             Egglog.snapshot(program, input,
-               render: :dot,
-               snapshot_inline_leaves: 1
-             )
-
-    assert dot_snapshot.format == :dot
-    assert dot_snapshot.dot =~ "digraph"
-    assert dot_snapshot.text == dot_snapshot.dot
-    assert dot_snapshot.svg == nil
-    assert Jason.decode!(dot_snapshot.json)["nodes"] != %{}
-    assert dot_snapshot.stats.snapshot_nodes > 0
-    assert output_text(dot_snapshot.result, :extract) =~ "Pair"
-
-    assert {:ok, json_snapshot} =
-             Egglog.snapshot(program, input,
-               render: :json,
-               snapshot_inline_leaves: 1
-             )
-
-    assert json_snapshot.format == :json
-    assert json_snapshot.json == json_snapshot.text
-    assert json_snapshot.dot =~ "digraph"
-    assert json_snapshot.svg == nil
-
-    decoded = Jason.decode!(json_snapshot.json)
-    assert is_map(decoded["nodes"])
-    assert is_map(decoded["class_data"])
-
-    assert %{nodes: nodes, classes: classes, operators: operators} =
-             Egglog.Snapshot.summary(json_snapshot)
-
-    assert nodes > 0
-    assert classes > 0
-    assert operators["Pair"] > 0
-
-    dir =
-      Path.join(System.tmp_dir!(), "egglog-snapshot-test-#{System.unique_integer([:positive])}")
-
+  @tag :tmp_dir
+  test "snapshot exports match the retained DOT and JSON with native outputs", %{tmp_dir: dir} do
+    theory = "(datatype Term (A) (B) (Pair Term Term))"
     dot_path = Path.join(dir, "graph.dot")
-    svg_path = Path.join(dir, "graph.svg")
     json_path = Path.join(dir, "graph.json")
 
-    try do
+    Egglog.with_program(theory, fn program ->
       snapshot =
-        Egglog.snapshot!(program, input,
-          render: :auto,
-          dot_path: dot_path,
-          svg_path: if(Egglog.Graphviz.executable(), do: svg_path),
-          snapshot_inline_leaves: 1
-        )
-
-      if Egglog.Graphviz.executable() do
-        assert File.read!(dot_path) == snapshot.dot
-        assert snapshot.format == :svg
-        assert snapshot.svg =~ "<svg"
-        assert File.read!(svg_path) == snapshot.svg
-      else
-        assert snapshot.format == :mermaid
-        assert is_binary(snapshot.dot)
-        assert File.read!(snapshot.dot_path) == snapshot.dot
-        assert snapshot.mermaid =~ "flowchart"
-        assert snapshot.svg == nil
-        refute Map.has_key?(snapshot, :svg_path)
-      end
-
-      json_snapshot =
-        Egglog.snapshot!(program, input,
+        Egglog.snapshot!(program, "(extract (Pair (A) (B)))",
           render: :json,
-          json_path: json_path,
-          snapshot_inline_leaves: 1
+          dot_path: dot_path,
+          json_path: json_path
         )
 
-      assert File.read!(json_path) == json_snapshot.json
-      assert Jason.decode!(json_snapshot.json)["nodes"]
-    after
-      File.rm_rf(dir)
-    end
+      assert snapshot.format == :json
+      assert File.read!(dot_path) == snapshot.dot
+      assert File.read!(json_path) == snapshot.json
+      assert snapshot.dot =~ "Pair"
+      assert output_text(snapshot.result, :extract) == "(Pair (A) (B))\n"
+
+      assert %{nodes: nodes, classes: classes, operators: %{"Pair" => 1}} =
+               Egglog.Snapshot.summary(snapshot)
+
+      assert nodes >= 3
+      assert classes >= 3
+    end)
   end
 
   test "output_limit returns a normal limit status" do

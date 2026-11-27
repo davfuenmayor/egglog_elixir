@@ -23,14 +23,16 @@ try do
   alias Egglog.Program.Step
   step = Step.next(Step.new(), "(datatype Expr (Num i64)) (Num 1)", render: :auto)
   %{format: :mermaid, mermaid: source} = step.snapshot
-  true = String.contains?(source, "flowchart")
+  true = String.contains?(source, ~s(["Num"]))
   IO.puts("PASS Mermaid output without Graphviz")
   """
 
+  script = Path.join(directory, "check_install.exs")
+  File.write!(script, code)
   executable = System.find_executable("elixir") || raise "Elixir executable not found"
 
   {output, status} =
-    System.cmd(executable, ["--erl", "+S 2:2", "-e", code],
+    System.cmd(executable, ["--erl", "+S 2:2", script],
       stderr_to_stdout: true,
       env: [
         {"EGGLOG_BUILD", nil},
@@ -41,7 +43,9 @@ try do
     )
 
   IO.write(output)
-  if status != 0, do: raise("Unpacked package installation failed")
+
+  unless status == 0 and String.contains?(output, "PASS Mermaid output without Graphviz"),
+    do: raise("Unpacked package installation failed")
 after
   File.rm_rf!(directory)
 end

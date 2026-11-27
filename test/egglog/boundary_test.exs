@@ -5,16 +5,16 @@ defmodule Egglog.BoundaryTest do
 
   alias Egglog.{Commands, EGraph, Program}
 
-  test "invalid timeouts are rejected before native input can mutate a graph" do
-    EGraph.with_egraph(fn graph ->
+  test "render timeouts accept only valid durations and only for snapshots" do
+    EGraph.with_egraph("(relation added ())", fn graph ->
       for timeout <- [0, -1, nil, :infinity, "bad", 4_294_967_296] do
         assert {:error, {:invalid_option, _}} = EGraph.snapshot(graph, render_timeout: timeout)
       end
 
-      assert EGraph.num_tuples(graph) == {:ok, 0}
-
       assert {:error, {:invalid_option, _}} =
-               EGraph.run(graph, "(relation added ())", render_timeout: 1)
+               EGraph.run(graph, "(added)", render_timeout: 1)
+
+      assert {:ok, false} = EGraph.check(graph, "(added)")
     end)
   end
 
@@ -95,7 +95,7 @@ defmodule Egglog.BoundaryTest do
           end
         end)
 
-      assert_receive {:graph, graph}
+      assert_receive {:graph, graph}, 2_000
       monitor = Process.monitor(graph.pid)
       send(owner, :stop)
       assert_receive {:DOWN, ^monitor, :process, _, :normal}, 2_000
@@ -140,7 +140,7 @@ defmodule Egglog.BoundaryTest do
   end
 
   test "invalid options cannot mutate native state" do
-    EGraph.with_egraph(fn graph ->
+    EGraph.with_egraph("(relation touched ())", fn graph ->
       for opts <- [
             [snapshop: :json],
             [snapshot_max_functions: -1],
@@ -150,16 +150,18 @@ defmodule Egglog.BoundaryTest do
             [snapshot_max_calls_per_function: 9_223_372_036_854_775_808],
             [{:snapshot, :json}, {"snapshot", :dot}]
           ] do
-        assert {:error, {:invalid_option, _}} = EGraph.run(graph, "(relation touched ())", opts)
-        assert {:ok, 0} = EGraph.num_tuples(graph)
+        assert {:error, {:invalid_option, _}} = EGraph.run(graph, "(touched)", opts)
+        assert {:ok, false} = EGraph.check(graph, "(touched)")
       end
 
       assert {:error, {:invalid_option, _}} =
-               EGraph.run(graph, %{source: "(relation touched ())"})
+               EGraph.run(graph, %{source: "(touched)"})
 
       assert {:error, {:invalid_option, _}} = EGraph.push(graph, -1)
       assert {:error, {:invalid_option, _}} = EGraph.lookup(graph, "x", [1])
-      assert {:ok, _} = EGraph.run(graph, "(relation touched ())")
+      assert {:ok, false} = EGraph.check(graph, "(touched)")
+      assert {:ok, _} = EGraph.run(graph, "(touched)")
+      assert {:ok, true} = EGraph.check(graph, "(touched)")
     end)
   end
 

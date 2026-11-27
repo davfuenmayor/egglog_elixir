@@ -8,11 +8,11 @@ defmodule Egglog.NativeManifestTest do
   test "prepares all five reviewed artifacts without changing the source manifest", %{
     tmp_dir: dir
   } do
-    fixtures(dir)
+    artifacts = fixtures(dir)
     original = File.read!("native/manifest.json")
     assert {output, 0} = prepare(dir)
     result = JSON.decode!(output)
-    assert Enum.sort(Map.keys(result["artifacts"])) == Enum.sort(@targets)
+    assert result["artifacts"] == artifacts
     assert result["source_sha256"] == Mix.Tasks.Compile.EgglogNative.source_fingerprint()
     assert result["release"] == "v#{@version}"
     assert File.read!("native/manifest.json") == original
@@ -28,6 +28,12 @@ defmodule Egglog.NativeManifestTest do
     assert output =~ "macos-aarch64"
     fixtures(dir)
 
+    File.write!(file, "changed after build", [:append])
+    assert {output, status} = prepare(dir)
+    assert status != 0
+    assert output =~ "archive checksum mismatch"
+    fixtures(dir)
+
     metadata =
       (file <> ".json") |> File.read!() |> JSON.decode!() |> Map.put("source_sha256", "wrong")
 
@@ -38,21 +44,19 @@ defmodule Egglog.NativeManifestTest do
   end
 
   defp fixtures(dir) do
-    for target <- @targets do
-      path = Path.join(dir, "egglog-#{@version}-#{target}.tar.gz")
+    source = Mix.Tasks.Compile.EgglogNative.source_fingerprint()
+
+    Map.new(@targets, fn target ->
+      file = "egglog-#{@version}-#{target}.tar.gz"
+      path = Path.join(dir, file)
       File.write!(path, "fixture #{target}")
       hash = :crypto.hash(:sha256, File.read!(path)) |> Base.encode16(case: :lower)
       File.write!(path <> ".sha256", hash <> "\n")
 
-      File.write!(
-        path <> ".json",
-        JSON.encode!(%{
-          target: target,
-          sha256: hash,
-          source_sha256: Mix.Tasks.Compile.EgglogNative.source_fingerprint()
-        })
-      )
-    end
+      metadata = %{"target" => target, "sha256" => hash, "source_sha256" => source}
+      File.write!(path <> ".json", JSON.encode!(metadata))
+      {target, %{"file" => file, "sha256" => hash, "build" => metadata}}
+    end)
   end
 
   defp prepare(dir) do

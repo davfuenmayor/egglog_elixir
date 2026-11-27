@@ -78,18 +78,6 @@ defmodule Egglog.NativeBundleTest do
   end
 
   @tag :tmp_dir
-  test "simultaneous fresh installs share one valid native payload", %{tmp_dir: dir} do
-    archive = project(dir)
-    bundle(archive, target())
-
-    1..3
-    |> Task.async_stream(fn _ -> install(dir) end, timeout: 30_000)
-    |> Enum.each(fn result -> assert {:ok, {_, 0}} = result end)
-
-    assert File.regular?(Path.join(dir, "priv/native/egglog_nif.#{extension()}"))
-  end
-
-  @tag :tmp_dir
   test "restores missing files in a copied application priv directory", %{tmp_dir: dir} do
     archive = project(dir)
     bundle(archive, target())
@@ -167,7 +155,7 @@ defmodule Egglog.NativeBundleTest do
   end
 
   @tag :tmp_dir
-  test "downloads during Mix compilation with pruned code paths", %{tmp_dir: dir} do
+  test "Mix compilation installs the downloaded bundle with pruned code paths", %{tmp_dir: dir} do
     {archive, _manifest} = release_fixture(dir)
     {url, listener} = serve(File.read!(archive))
     on_exit(fn -> :gen_tcp.close(listener) end)
@@ -192,6 +180,11 @@ defmodule Egglog.NativeBundleTest do
 
     {output, status} = install(dir, env, code)
     assert status == 0, output
+
+    assert File.read(Path.join(dir, "priv/native/egglog_nif.#{extension()}")) ==
+             {:ok, "fixture NIF"},
+           output
+
     assert_received :download
   end
 
@@ -228,7 +221,9 @@ defmodule Egglog.NativeBundleTest do
   end
 
   @tag :tmp_dir
-  test "concurrent cold downloads install one verified cache entry", %{tmp_dir: dir} do
+  test "concurrent cold installs share a verified cache entry and installed payload", %{
+    tmp_dir: dir
+  } do
     {archive, manifest} = release_fixture(dir)
     {url, listener} = serve(File.read!(archive))
     on_exit(fn -> :gen_tcp.close(listener) end)
@@ -249,6 +244,7 @@ defmodule Egglog.NativeBundleTest do
              File.read!(archive)
 
     assert Path.wildcard(Path.join(dir, "cache/**/*.tmp")) == []
+    assert File.read!(Path.join(dir, "priv/native/egglog_nif.#{extension()}")) == "fixture NIF"
   end
 
   @tag :tmp_dir
@@ -383,7 +379,11 @@ defmodule Egglog.NativeBundleTest do
          extra_env \\ [],
          code \\ "Mix.start(); Code.require_file(\"mix.exs\"); Mix.Tasks.Compile.EgglogNative.run([])"
        ) do
-    System.cmd(System.find_executable("elixir"), ["--erl", "+S 1:1", "-e", code],
+    # A script file keeps the Elixir source out of the Windows batch command line.
+    script = Path.join(dir, "install-#{System.unique_integer([:positive])}.exs")
+    File.write!(script, code)
+
+    System.cmd(System.find_executable("elixir"), ["--erl", "+S 1:1", script],
       cd: dir,
       stderr_to_stdout: true,
       env:

@@ -143,24 +143,16 @@ defmodule Egglog.EGraphIntegrationTest do
   end
 
   test "mutable sessions can snapshot current state as json" do
-    assert {:ok, egraph} =
-             EGraph.new("""
-             (datatype Expr (Num i64) (Add Expr Expr))
-             """)
+    EGraph.with_egraph("(datatype Expr (Num i64) (Add Expr Expr))", fn graph ->
+      before = EGraph.snapshot!(graph, render: :json)
+      assert Egglog.Snapshot.nodes(before) == %{}
 
-    assert {:ok, _} = EGraph.run(egraph, "(let x (Add (Num 1) (Num 2)))")
+      EGraph.run!(graph, "(let x (Add (Num 1) (Num 2)))")
+      snapshot = EGraph.snapshot!(graph, render: :json)
 
-    assert {:ok, snapshot} =
-             EGraph.snapshot(egraph,
-               render: :json,
-               snapshot_max_functions: 20,
-               snapshot_max_calls_per_function: 20
-             )
-
-    assert snapshot.format == :json
-    assert snapshot.stats.snapshot_nodes > 0
-    assert snapshot.json =~ ~s("nodes")
-    assert snapshot.json =~ "Add"
+      assert snapshot.format == :json
+      assert %{operators: %{"Add" => 1, "Num" => 2}} = Egglog.Snapshot.summary(snapshot)
+    end)
   end
 
   test "closed mutable sessions reject later operations" do
