@@ -45,6 +45,7 @@ pub fn execute_program(
         snapshot_inline_leaves,
         snapshot_split_primitive_outputs,
     )
+    .map_err(|error| error.context("run", program))
 }
 
 pub fn execute_commands(

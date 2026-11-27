@@ -25,9 +25,18 @@ defmodule Egglog.EGraph.Server do
     proofs? = Keyword.fetch!(opts, :proofs?)
 
     case Native.new_egraph(source, proofs?, Keyword.fetch!(opts, :num_threads))
+         |> Common.errors(Keyword.get(opts, :error_details, false))
          |> Common.from_native_load() do
-      {:ok, ref} -> {:ok, %{ref: ref, owner: Process.monitor(Keyword.fetch!(opts, :owner))}}
-      {:error, reason} -> {:stop, reason}
+      {:ok, ref} ->
+        {:ok,
+         %{
+           ref: ref,
+           owner: Process.monitor(Keyword.fetch!(opts, :owner)),
+           error_details: Keyword.get(opts, :error_details, false)
+         }}
+
+      {:error, reason} ->
+        {:stop, reason}
     end
   end
 
@@ -47,6 +56,7 @@ defmodule Egglog.EGraph.Server do
         snapshot.inline_leaves,
         snapshot.split_primitive_outputs?
       )
+      |> Common.errors(state.error_details)
       |> Common.from_native_result(output_limit)
 
     reply(result, state)
@@ -63,6 +73,7 @@ defmodule Egglog.EGraph.Server do
         snapshot.inline_leaves,
         snapshot.split_primitive_outputs?
       )
+      |> Common.errors(state.error_details)
       |> Common.from_native_result(output_limit)
 
     reply(result, state)
@@ -72,51 +83,111 @@ defmodule Egglog.EGraph.Server do
     result =
       ref
       |> Native.eval_egraph(expr)
+      |> Common.errors(state.error_details)
       |> Common.from_native_value()
 
     reply(result, state)
+  end
+
+  def handle_call({:extract, expr, variants}, _from, %{ref: ref} = state) do
+    reply(
+      Native.extract_egraph(ref, expr, variants)
+      |> Common.errors(state.error_details)
+      |> Common.from_native_extraction(),
+      state
+    )
   end
 
   def handle_call({:lookup, name, arg_exprs}, _from, %{ref: ref} = state) do
     result =
       ref
       |> Native.lookup_egraph(name, arg_exprs)
+      |> Common.errors(state.error_details)
       |> Common.from_native_lookup()
 
     reply(result, state)
   end
 
   def handle_call(:num_tuples, _from, %{ref: ref} = state) do
-    result = ref |> Native.egraph_num_tuples() |> Common.from_native_count()
+    result =
+      ref
+      |> Native.egraph_num_tuples()
+      |> Common.errors(state.error_details)
+      |> Common.from_native_count()
+
     reply(result, state)
   end
 
   def handle_call(:functions, _from, %{ref: ref} = state) do
-    reply(Native.functions_egraph(ref) |> Common.from_native_functions(), state)
+    reply(
+      Native.functions_egraph(ref)
+      |> Common.errors(state.error_details)
+      |> Common.from_native_functions(),
+      state
+    )
   end
 
+  def handle_call({:rows, name, limit}, _from, %{ref: ref} = state),
+    do:
+      reply(
+        Native.rows_egraph(ref, name, limit)
+        |> Common.errors(state.error_details)
+        |> Common.from_native_rows(),
+        state
+      )
+
   def handle_call({:function, name}, _from, %{ref: ref} = state) do
-    reply(Native.function_egraph(ref, name) |> Common.from_native_function(), state)
+    reply(
+      Native.function_egraph(ref, name)
+      |> Common.errors(state.error_details)
+      |> Common.from_native_function(),
+      state
+    )
   end
 
   def handle_call({:clear_function, name}, _from, %{ref: ref} = state) do
-    reply(Native.clear_function_egraph(ref, name) |> Common.from_native_close(), state)
+    reply(
+      Native.clear_function_egraph(ref, name)
+      |> Common.errors(state.error_details)
+      |> Common.from_native_close(),
+      state
+    )
   end
 
   def handle_call({:query, vars, facts}, _from, %{ref: ref} = state) do
-    reply(Native.query_egraph(ref, vars, facts) |> Common.from_native_bindings(), state)
+    reply(
+      Native.query_egraph(ref, vars, facts)
+      |> Common.errors(state.error_details)
+      |> Common.from_native_bindings(),
+      state
+    )
   end
 
   def handle_call(:num_threads, _from, %{ref: ref} = state) do
-    reply(Native.egraph_num_threads(ref) |> Common.from_native_count(), state)
+    reply(
+      Native.egraph_num_threads(ref)
+      |> Common.errors(state.error_details)
+      |> Common.from_native_count(),
+      state
+    )
   end
 
   def handle_call({:set_num_threads, count}, _from, %{ref: ref} = state) do
-    reply(Native.set_egraph_num_threads(ref, count) |> Common.from_native_close(), state)
+    reply(
+      Native.set_egraph_num_threads(ref, count)
+      |> Common.errors(state.error_details)
+      |> Common.from_native_close(),
+      state
+    )
   end
 
   def handle_call(:close, _from, %{ref: ref} = state) do
-    result = ref |> Native.close_egraph() |> Common.from_native_close()
+    result =
+      ref
+      |> Native.close_egraph()
+      |> Common.errors(state.error_details)
+      |> Common.from_native_close()
+
     {:stop, :normal, result, %{state | ref: nil}}
   end
 

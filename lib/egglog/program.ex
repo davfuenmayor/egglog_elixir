@@ -32,7 +32,7 @@ defmodule Egglog.Program do
   alias Egglog.{Commands, Common, Native, Options}
 
   @enforce_keys [:ref]
-  defstruct [:ref, modes: %{}, default_budget: %{rounds: 0}, name: nil]
+  defstruct [:ref, modes: %{}, default_budget: %{rounds: 0}, name: nil, error_details: false]
 
   @load_doc """
   Loads a static egglog program into a reusable native handle.
@@ -41,6 +41,8 @@ defmodule Egglog.Program do
   `:program`.
 
   Supported options:
+
+    * `:error_details` - opt into structured non-parser errors. See `Egglog`.
 
     * `:num_threads` - native worker threads retained by each clone. Defaults
       to `1` (serial); `0` uses available parallelism. Configure at load time.
@@ -199,20 +201,21 @@ defmodule Egglog.Program do
   """
 
   @program_extract_doc """
-  Extracts the cheapest native egglog term for `expr`.
+  Extracts native egglog terms for `expr`.
 
-  Supported options:
+    * `:extract_format` — `:text` (default) or `:structured`.
+    * `:variants` — a positive number of root alternatives; by default extract
+      only the cheapest term. Variants retain upstream ordering.
 
-    * `:variants` - optional value inserted as the second argument to native
-      egglog's `(extract expr variants)` command. Defaults to unset, which uses
-      `(extract expr)`.
+  Text mode accepts all `run/3` options and returns the last extraction text.
+  Missing or truncated extraction output returns an error.
 
-  All `run/3` options are also accepted and passed through after appending the
-  extract request to the input. Defaults are the `run/3` defaults. Snapshot and
-  output options may affect the internal run, but `extract/4` returns only the
-  last extraction text. Missing or truncated extraction output returns an error.
-
-  String option keys are also accepted, matching the rest of the wrapper.
+  Structured mode returns the native DAG and per-root costs documented in
+  `Egglog.Extraction`. It retains native term data, without printing
+  or parsing extracted terms. It also accepts the query-construction options `:mode` and
+  `:budget`; input and scheduling are applied once to a clone of the base.
+  Snapshot and output-limit options are rejected in structured mode.
+  String option keys and values are accepted.
   """
 
   @snapshot_doc """
@@ -282,30 +285,19 @@ defmodule Egglog.Program do
       producing DOT or JSON text. Defaults to input
       `:snapshot_split_primitive_outputs`, then `false`.
 
-    * `:path` - optional file path where the returned `:text` payload is
-      written. Defaults to unset.
-
-    * `:dot_path` - optional file path where DOT is written when DOT text is
-      available. Defaults to unset. For JSON/Mermaid renders, this key is recorded
-      as `nil` if provided because no DOT text is produced.
-
-    * `:svg_path` - optional file path where SVG is written when SVG rendering
-      succeeds. Defaults to unset. For non-SVG renders, this key is recorded as
-      `nil` if provided.
-
-    * `:mermaid_path` - optional destination for Mermaid source (.mmd).
-      It is nil on renders that do not produce Mermaid. Mermaid snapshots also
-      retain native JSON, so json_path exports that same input.
-
-    * `:json_path` - optional file path where JSON is written when
-      JSON or Mermaid rendering is used. Defaults to unset. Otherwise, this
-      key is recorded as `nil` if provided.
+    * `:path` - writes the selected view. `:dot_path` and `:json_path` write
+      either retained native format. `:svg_path` and `:mermaid_path` require
+      the matching rendered view. Unavailable formats and write failures return
+      the retained snapshot and paths already written. See `Egglog.Snapshot.render/2`.
 
   The returned snapshot map contains:
 
     * `:format` - one of `:dot`, `:svg`, `:json`, or `:mermaid`.
     * `:text` - the primary payload for the selected render.
-    * `:dot`, `:svg`, `:json`, or `:mermaid` - the format-specific payload when present.
+    * `:dot`, `:json` - matching native payloads from one serialization.
+    * `:svg`, `:mermaid` - the selected rendered payload, when applicable.
+    * `:rendering` - renderer choice and automatic fallback diagnostics.
+    * `:complete`, `:truncated_functions`, `:discarded_functions` - native omission data.
     * `:omitted` - native omission metadata for capped snapshots.
     * `:stats` - snapshot-specific native stats, currently
       `:snapshot_nodes` and `:snapshot_classes` when available.
@@ -356,13 +348,15 @@ defmodule Egglog.Program do
                Common.get(opts, :proofs, false),
                Common.get(opts, :num_threads, 1)
              )
+             |> Common.errors(Common.get(opts, :error_details, false))
              |> Common.from_native_load() do
         {:ok,
          %__MODULE__{
            ref: ref,
            modes: Common.get(opts, :modes, %{}),
            default_budget: Common.get(opts, :default_budget, %{}),
-           name: Common.get(opts, :name)
+           name: Common.get(opts, :name),
+           error_details: Common.get(opts, :error_details, false)
          }}
       end
     end)
@@ -399,6 +393,7 @@ defmodule Egglog.Program do
         snapshot.inline_leaves,
         snapshot.split_primitive_outputs?
       )
+      |> Common.errors(program.error_details)
       |> Common.from_native_result(Common.get(opts, :output_limit))
     end)
   end
@@ -424,6 +419,7 @@ defmodule Egglog.Program do
           snapshot.inline_leaves,
           snapshot.split_primitive_outputs?
         )
+        |> Common.errors(program.error_details)
         |> Common.from_native_result(output_limit)
       end
     end)
@@ -483,13 +479,22 @@ defmodule Egglog.Program do
   @doc @program_extract_doc
   def extract(%__MODULE__{} = program, input, expr, opts \\ []) when is_binary(expr) do
     Options.with_options(opts, :program_extract, fn opts ->
-      program
-      |> run_request(
-        input,
-        Common.extract_request(expr, opts),
-        Map.delete(opts, :variants)
-      )
-      |> Common.extraction()
+      {format, opts} = Map.pop(opts, :extract_format, :text)
+
+      if format == :structured do
+        Options.with_options(opts, :program_structured_extract, fn opts ->
+          with {:ok, source} <- run_source(program, input, Map.delete(opts, :variants)) do
+            program.ref
+            |> Native.extract_program(source, expr, Common.get(opts, :variants))
+            |> Common.errors(program.error_details)
+            |> Common.from_native_extraction()
+          end
+        end)
+      else
+        program
+        |> run_request(input, Common.extract_request(expr, opts), Map.delete(opts, :variants))
+        |> Common.extraction()
+      end
     end)
   end
 
@@ -518,7 +523,10 @@ defmodule Egglog.Program do
   def eval(%__MODULE__{} = program, input, expr, opts \\ []) when is_binary(expr) do
     Options.with_options(opts, :program_query, fn opts ->
       with {:ok, source} <- run_source(program, input, opts) do
-        program.ref |> Native.eval_program(source, expr) |> Common.from_native_value()
+        program.ref
+        |> Native.eval_program(source, expr)
+        |> Common.errors(program.error_details)
+        |> Common.from_native_value()
       end
     end)
   end
@@ -552,6 +560,7 @@ defmodule Egglog.Program do
            true <- Enum.all?(arg_exprs, &is_binary/1) do
         program.ref
         |> Native.lookup_program(source, name, arg_exprs)
+        |> Common.errors(program.error_details)
         |> Common.from_native_lookup()
       else
         false -> {:error, {:invalid_option, "lookup arguments must be source strings"}}
@@ -601,17 +610,41 @@ defmodule Egglog.Program do
     |> Common.bang("failed to snapshot egglog e-graph")
   end
 
+  @doc """
+  Inspects a table after query-local input on a fresh clone. See
+  `Egglog.EGraph.rows/3` for the result and `:limit`; also accepts `:mode` and `:budget`.
+  """
+  def rows(%__MODULE__{} = program, input, name, opts \\ []) when is_binary(name) do
+    Options.with_options(opts, :program_rows, fn opts ->
+      with {:ok, source} <- run_source(program, input, Map.delete(opts, :limit)) do
+        Native.rows_program(program.ref, source, name, Common.get(opts, :limit, 100))
+        |> Common.errors(program.error_details)
+        |> Common.from_native_rows()
+      end
+    end)
+  end
+
+  @doc "Bang variant of `rows/4`."
+  def rows!(program, input, name, opts \\ []),
+    do: rows(program, input, name, opts) |> Common.bang("failed to inspect table")
+
   @doc "Returns native declarations from the loaded base; see `Egglog.EGraph.functions/1` for map fields. Query-local declarations are not retained."
-  def functions(%__MODULE__{ref: ref}),
-    do: Native.functions_program(ref) |> Common.from_native_functions()
+  def functions(%__MODULE__{ref: ref} = program),
+    do:
+      Native.functions_program(ref)
+      |> Common.errors(program.error_details)
+      |> Common.from_native_functions()
 
   @doc "Bang variant of `functions/1`."
   def functions!(program),
     do: functions(program) |> Common.bang("failed to inspect egglog functions")
 
   @doc "Returns a native base declaration map, or `{:ok, nil}` for an unknown name; see `Egglog.EGraph.function/2`."
-  def function(%__MODULE__{ref: ref}, name) when is_binary(name),
-    do: Native.function_program(ref, name) |> Common.from_native_function()
+  def function(%__MODULE__{ref: ref} = program, name) when is_binary(name),
+    do:
+      Native.function_program(ref, name)
+      |> Common.errors(program.error_details)
+      |> Common.from_native_function()
 
   @doc "Bang variant of `function/2`."
   def function!(program, name),
@@ -629,7 +662,9 @@ defmodule Egglog.Program do
     Options.with_options(opts, :program_query, fn opts ->
       with {:ok, vars, facts} <- Common.query_inputs(vars, facts),
            {:ok, source} <- run_source(program, input, opts) do
-        Native.query_program(program.ref, source, vars, facts) |> Common.from_native_bindings()
+        Native.query_program(program.ref, source, vars, facts)
+        |> Common.errors(program.error_details)
+        |> Common.from_native_bindings()
       end
     end)
   end
@@ -639,8 +674,11 @@ defmodule Egglog.Program do
     do: query(program, input, vars, facts, opts) |> Common.bang("failed to query egglog")
 
   @doc "Returns `{:ok, count}` for the loaded base's native thread configuration, retained by each clone."
-  def num_threads(%__MODULE__{ref: ref}),
-    do: Native.program_num_threads(ref) |> Common.from_native_count()
+  def num_threads(%__MODULE__{ref: ref} = program),
+    do:
+      Native.program_num_threads(ref)
+      |> Common.errors(program.error_details)
+      |> Common.from_native_count()
 
   @doc """
   Returns native egglog's tuple count for the loaded base program.
@@ -651,14 +689,20 @@ defmodule Egglog.Program do
   `snapshot/3` on the query you want to inspect.
   """
   def num_tuples(%__MODULE__{} = program) do
-    program.ref |> Native.program_num_tuples() |> Common.from_native_count()
+    program.ref
+    |> Native.program_num_tuples()
+    |> Common.errors(program.error_details)
+    |> Common.from_native_count()
   end
 
   @doc """
   Closes the native loaded-program resource.
   """
   def close(%__MODULE__{} = program) do
-    program.ref |> Native.close_program() |> Common.from_native_close()
+    program.ref
+    |> Native.close_program()
+    |> Common.errors(program.error_details)
+    |> Common.from_native_close()
   end
 
   defp build_run_source(program, input, budget, mode) do

@@ -2,14 +2,7 @@
 
 ```elixir
 Mix.install(
-  [
-    if File.regular?(Path.expand("../mix.exs", __DIR__)) do
-      {:egglog_elixir, path: Path.expand("..", __DIR__)}
-    else
-      {:egglog_elixir, git: "https://github.com/davfuenmayor/egglog_elixir.git", branch: "main"}
-    end,
-    {:kino, "~> 0.19.0"}
-  ],
+  [{:egglog_elixir, "0.3.0"}, {:kino, "~> 0.19.0"}],
   consolidate_protocols: false
 )
 
@@ -68,9 +61,8 @@ This guide shows how to use the library in an application: choose an execution
 model, obtain structured results, handle errors, and close native resources.
 The same arithmetic example makes the two models directly comparable.
 
-In a Mix application, add the wrapper to `mix.exs` with a pinned version or reviewed
-Git revision. `Mix.install` and the graph display helpers above are for this
-notebook; application code needs neither Livebook nor Kino.
+In a Mix application, add `{:egglog_elixir, "0.3.0"}` to your dependencies.
+`Mix.install` and the graph display helpers are specific to the notebook.
 
 ## Two execution models
 

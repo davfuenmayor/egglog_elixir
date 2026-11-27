@@ -4,6 +4,15 @@ defmodule Egglog.Common do
   @snapshot_artifact_keys [:path, :dot_path, :svg_path, :json_path, :mermaid_path]
   @snapshot_render_keys [:render, :render_timeout]
 
+  def errors({:error, reason, message, details}, true),
+    do:
+      {:error,
+       {reason, message,
+        %{details | names: Enum.group_by(details.names, &elem(&1, 0), &elem(&1, 1))}}}
+
+  def errors({:error, reason, message, _details}, false), do: {:error, reason, message}
+  def errors(result, _details), do: result
+
   def from_native_load({:ok, ref}), do: {:ok, ref}
   def from_native_load({:error, _reason} = error), do: error
   def from_native_load({:error, reason, message}), do: {:error, {reason, message}}
@@ -17,7 +26,7 @@ defmodule Egglog.Common do
         limit
       ) do
     {outputs, limited?} = limit_outputs(outputs, limit)
-    {snapshot_format, snapshot_text, snapshot_omitted, snapshot_stats} = snapshot
+    {snapshot_format, snapshot_omitted, snapshot_stats, data} = snapshot
 
     result = %{
       status: if(limited?, do: :limit, else: status),
@@ -27,7 +36,7 @@ defmodule Egglog.Common do
       report: report(report)
     }
 
-    {:ok, put_snapshot(result, snapshot_format, snapshot_text, snapshot_omitted)}
+    {:ok, put_snapshot(result, snapshot_format, snapshot_omitted, data)}
   end
 
   def from_native_close(:ok), do: :ok
@@ -43,6 +52,10 @@ defmodule Egglog.Common do
   def from_native_lookup({:error, _reason} = error), do: error
   def from_native_lookup({:error, reason, message}), do: {:error, {reason, message}}
 
+  def from_native_extraction({:ok, data}), do: {:ok, data}
+  def from_native_extraction({:error, _reason} = error), do: error
+  def from_native_extraction({:error, reason, message}), do: {:error, {reason, message}}
+
   def from_native_count({:ok, count}), do: {:ok, count}
   def from_native_count({:error, _reason} = error), do: error
   def from_native_count({:error, reason, message}), do: {:error, {reason, message}}
@@ -54,6 +67,24 @@ defmodule Egglog.Common do
   def from_native_function({:ok, function}), do: {:ok, function(function)}
   def from_native_function({:error, _reason} = error), do: error
   def from_native_function({:error, reason, message}), do: {:error, {reason, message}}
+
+  def from_native_rows({:ok, rows, truncated}) do
+    {:ok,
+     %{
+       rows:
+         Enum.map(rows, fn {inputs, output, subsumed} ->
+           %{
+             inputs: Enum.map(inputs, fn {sort, kind, raw} -> value(sort, kind, raw) end),
+             output: then(output, fn {sort, kind, raw} -> value(sort, kind, raw) end),
+             subsumed: subsumed
+           }
+         end),
+       truncated: truncated
+     }}
+  end
+
+  def from_native_rows({:error, _} = error), do: error
+  def from_native_rows({:error, reason, message}), do: {:error, {reason, message}}
 
   def from_native_bindings({:ok, rows}) do
     {:ok,
@@ -103,8 +134,7 @@ defmodule Egglog.Common do
   def snapshot_from_result(%{snapshot: native_snapshot, stats: stats} = result, opts, render) do
     with {:ok, rendered} <-
            render_snapshot(
-             native_snapshot.text,
-             native_snapshot.format,
+             native_snapshot,
              render,
              get(opts, :render_timeout, 30_000)
            ) do
@@ -112,11 +142,15 @@ defmodule Egglog.Common do
         %{
           format: rendered.format,
           text: rendered.text,
-          dot: Map.get(rendered, :dot),
+          dot: native_snapshot.dot,
           svg: Map.get(rendered, :svg),
-          json: Map.get(rendered, :json),
+          json: native_snapshot.json,
           mermaid: Map.get(rendered, :mermaid),
           omitted: native_snapshot.omitted,
+          complete: native_snapshot.complete,
+          truncated_functions: native_snapshot.truncated_functions,
+          discarded_functions: native_snapshot.discarded_functions,
+          rendering: rendered.rendering,
           stats: Map.take(stats, [:snapshot_nodes, :snapshot_classes]),
           result: result
         }
@@ -168,6 +202,8 @@ defmodule Egglog.Common do
 
   def check_result({:ok, _result}), do: {:ok, true}
 
+  def check_result({:error, {:check_failed, _message, _details}}), do: {:ok, false}
+
   def check_result({:error, {:check_failed, _message}}), do: {:ok, false}
 
   def check_result({:error, reason}), do: {:error, reason}
@@ -193,6 +229,9 @@ defmodule Egglog.Common do
   end
 
   def extraction({:error, reason}), do: {:error, reason}
+
+  def bang({:error, {:snapshot_io, path, %{reason: reason}}}, message),
+    do: raise("#{message}: cannot export #{path}: #{inspect(reason)}")
 
   def bang({:ok, value}, _message), do: value
   def bang({:error, reason}, message), do: raise("#{message}: #{inspect(reason)}")
@@ -253,58 +292,69 @@ defmodule Egglog.Common do
 
   defp limit_outputs(outputs, limit), do: {Enum.take(outputs, limit), length(outputs) > limit}
 
-  defp put_snapshot(result, "", _text, _omitted), do: result
-  defp put_snapshot(result, "none", _text, _omitted), do: result
+  defp put_snapshot(result, "", _omitted, _data), do: result
+  defp put_snapshot(result, "none", _omitted, _data), do: result
 
-  defp put_snapshot(result, format, text, omitted) do
-    Map.put(result, :snapshot, %{format: String.to_atom(format), text: text, omitted: omitted})
+  defp put_snapshot(result, format, omitted, data) do
+    format = String.to_existing_atom(format)
+    text = Map.fetch!(data, format)
+
+    Map.put(
+      result,
+      :snapshot,
+      Map.merge(data, %{format: format, text: text, omitted: omitted})
+    )
   end
 
-  defp render_snapshot(json, :json, render, _timeout)
-       when render in [:mermaid, "mermaid", :auto, "auto", true] do
-    with {:ok, mermaid} <- Egglog.Snapshot.to_mermaid(json) do
-      {:ok, %{format: :mermaid, text: mermaid, mermaid: mermaid, json: json}}
+  defp render_snapshot(native, render, timeout) do
+    executable = Egglog.Graphviz.executable()
+    automatic? = render in [:auto, "auto", true]
+
+    selected =
+      cond do
+        automatic? -> if(executable, do: :svg, else: :mermaid)
+        render in [false, nil] -> :dot
+        is_binary(render) -> String.to_existing_atom(render)
+        true -> render
+      end
+
+    result =
+      case selected do
+        :dot ->
+          {:ok, %{format: :dot, text: native.dot}}
+
+        :json ->
+          {:ok, %{format: :json, text: native.json}}
+
+        :mermaid ->
+          with {:ok, source} <- Egglog.Snapshot.to_mermaid(native.json),
+               do: {:ok, %{format: :mermaid, text: source, mermaid: source}}
+
+        :svg when is_nil(executable) ->
+          {:error,
+           {:graphviz_missing,
+            "could not find Graphviz dot (EGGLOG_GRAPHVIZ_DOT, GRAPHVIZ_DOT or PATH)"}}
+
+        :svg ->
+          render_svg(native.dot, timeout, executable)
+      end
+
+    report = %{requested: render, executable: if(selected == :svg, do: executable), fallback: nil}
+
+    case result do
+      {:error, reason} when automatic? ->
+        {:ok, %{format: :dot, text: native.dot, rendering: %{report | fallback: reason}}}
+
+      {:ok, rendered} ->
+        fallback = if automatic? and is_nil(executable), do: :graphviz_missing
+        {:ok, Map.put(rendered, :rendering, %{report | fallback: fallback})}
+
+      error ->
+        error
     end
   end
 
-  defp render_snapshot(json, :json, render, _timeout) when render in [:json, "json"] do
-    {:ok, %{format: :json, text: json, json: json}}
-  end
-
-  defp render_snapshot(text, format, _render, _timeout) when format != :dot do
-    {:ok, %{format: format, text: text}}
-  end
-
-  defp render_snapshot(dot, :dot, render, _timeout) when render in [:dot, "dot", false, nil] do
-    {:ok, %{format: :dot, text: dot, dot: dot}}
-  end
-
-  defp render_snapshot(dot, :dot, render, timeout)
-       when render in [:auto, "auto", :svg, "svg", true] do
-    case Egglog.Graphviz.executable() do
-      nil when render in [:auto, "auto", true] ->
-        {:ok, %{format: :dot, text: dot, dot: dot}}
-
-      nil ->
-        {:error,
-         {:graphviz_missing,
-          "could not find Graphviz dot (EGGLOG_GRAPHVIZ_DOT, GRAPHVIZ_DOT or PATH)"}}
-
-      _dot ->
-        case render_svg(dot, timeout) do
-          {:error, _reason} when render in [:auto, "auto", true] ->
-            {:ok, %{format: :dot, text: dot, dot: dot}}
-
-          result ->
-            result
-        end
-    end
-  end
-
-  defp render_snapshot(_text, _format, render, _timeout),
-    do: {:error, {:unsupported_render, render}}
-
-  defp render_svg(dot, timeout) do
+  defp render_svg(dot, timeout, executable) do
     # A private directory avoids collisions across concurrent BEAM instances.
     directory =
       Path.join(
@@ -319,7 +369,7 @@ defmodule Egglog.Common do
       with :ok <- File.mkdir(directory),
            :ok <- File.write(dot_path, dot),
            :ok <- if(match?({:unix, _}, :os.type()), do: File.chmod(directory, 0o700), else: :ok),
-           {:ok, _} <- Egglog.Graphviz.render(dot_path, svg_path, timeout),
+           {:ok, _} <- Egglog.Graphviz.render(dot_path, svg_path, timeout, executable),
            {:ok, svg} <- File.read(svg_path) do
         {:ok, %{format: :svg, text: svg, svg: svg, dot: dot}}
       else
@@ -335,33 +385,54 @@ defmodule Egglog.Common do
   end
 
   defp write_snapshot_artifacts(snapshot, opts) do
-    Enum.reduce_while(@snapshot_artifact_keys, {:ok, snapshot}, fn key, {:ok, snapshot} ->
+    Enum.reduce_while(@snapshot_artifact_keys, {:ok, snapshot}, fn key, {:ok, current} ->
       content =
         case key do
-          :dot_path -> snapshot.dot
-          :svg_path -> snapshot.svg
-          :json_path -> snapshot.json
-          :mermaid_path -> snapshot.mermaid
-          :path -> snapshot.text
+          :path -> current.text
+          :dot_path -> current.dot
+          :svg_path -> current.svg
+          :json_path -> current.json
+          :mermaid_path -> current.mermaid
         end
 
       case get(opts, key) do
         nil ->
-          {:cont, {:ok, snapshot}}
-
-        _path when is_nil(content) ->
-          {:cont, {:ok, Map.put(snapshot, key, nil)}}
+          {:cont, {:ok, current}}
 
         path ->
           path = Path.expand(path)
 
-          with :ok <- File.mkdir_p(Path.dirname(path)), :ok <- File.write(path, content) do
-            {:cont, {:ok, Map.put(snapshot, key, path)}}
-          else
-            {:error, reason} -> {:halt, {:error, {:snapshot_io, path, reason}}}
+          result =
+            if is_nil(content),
+              do: {:error, {:format_unavailable, key}},
+              else: atomic_write(path, content)
+
+          case result do
+            :ok ->
+              {:cont, {:ok, Map.put(current, key, path)}}
+
+            {:error, reason} ->
+              artifacts = Map.take(current, @snapshot_artifact_keys)
+
+              {:halt,
+               {:error,
+                {:snapshot_io, path, %{reason: reason, snapshot: current, artifacts: artifacts}}}}
           end
       end
     end)
+  end
+
+  defp atomic_write(path, content) do
+    temporary =
+      path <> "." <> Base.url_encode64(:crypto.strong_rand_bytes(12), padding: false) <> ".tmp"
+
+    try do
+      with :ok <- File.mkdir_p(Path.dirname(path)),
+           :ok <- File.write(temporary, content, [:exclusive]),
+           do: File.rename(temporary, path)
+    after
+      File.rm(temporary)
+    end
   end
 
   defp snapshot_format(nil), do: "none"

@@ -56,7 +56,9 @@ pub fn lookup_function(
             .parser
             .get_expr_from_string(None, &expr)
             .map_err(NativeError::from)?;
-        let (sort, value) = egraph.eval_expr(&parsed).map_err(NativeError::from)?;
+        let (sort, value) = egraph
+            .eval_expr(&parsed)
+            .map_err(|error| NativeError::from(error).context("lookup_argument", &expr))?;
 
         if sort.name() != expected_sort {
             return Err(NativeError::Native(format!(
@@ -103,6 +105,42 @@ pub fn functions(graph: &EGraph) -> Vec<NativeFunction> {
         .functions_iter()
         .map(|(_, function)| function_info(function))
         .collect()
+}
+
+pub type NativeRows = (Vec<(Vec<NativeValue>, NativeValue, bool)>, bool);
+
+pub fn rows(graph: &EGraph, name: &str, limit: usize) -> Result<NativeRows, NativeError> {
+    let function = graph
+        .get_function(name)
+        .ok_or_else(|| NativeError::Native(format!("could not find function {name}")))?;
+    let schema = function.func_type();
+    let mut rows = Vec::new();
+    let mut truncated = false;
+    let mut collect = |inputs: &[Value], output: Value, subsumed: bool| {
+        if rows.len() == limit {
+            truncated = true;
+            return false;
+        }
+        let inputs = inputs
+            .iter()
+            .zip(&schema.input)
+            .map(|(value, sort)| encode_value(graph, sort.name(), *value))
+            .collect();
+        rows.push((
+            inputs,
+            encode_value(graph, schema.output.name(), output),
+            subsumed,
+        ));
+        true
+    };
+    match schema.subtype {
+        FunctionSubtype::Custom => graph
+            .function_entries_while(name, |row| collect(row.inputs, row.output, row.subsumed))?,
+        FunctionSubtype::Constructor => graph.constructor_enodes_while(name, |row| {
+            collect(row.children, row.eclass, row.subsumed)
+        })?,
+    }
+    Ok((rows, truncated))
 }
 
 pub type NativeBindings = Vec<Vec<(String, NativeValue)>>;

@@ -43,6 +43,8 @@ end
 File.write!(
   Path.join(destination, "DEPENDENCIES.txt"),
   Enum.map_join(packages, "\n", fn package ->
-    "#{package["name"]} #{package["version"]} | #{package["license"] || "See license files"} | #{package["source"] || "local wrapper"}"
+    source = package["source"] || get_in(package, ["metadata", "upstream"]) || "local source"
+
+    "#{package["name"]} #{package["version"]} | #{package["license"] || "See license files"} | #{source}"
   end) <> "\n"
 )

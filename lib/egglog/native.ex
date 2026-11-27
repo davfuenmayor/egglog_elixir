@@ -58,6 +58,9 @@ defmodule Egglog.Native do
       ),
       do: :erlang.nif_error(:nif_not_loaded)
 
+  def extract_program(_program, _source, _expr, _variants), do: :erlang.nif_error(:nif_not_loaded)
+  def extract_egraph(_graph, _expr, _variants), do: :erlang.nif_error(:nif_not_loaded)
+
   def eval_program(_program, _source, _expr), do: :erlang.nif_error(:nif_not_loaded)
   def eval_egraph(_egraph, _expr), do: :erlang.nif_error(:nif_not_loaded)
   def lookup_program(_program, _source, _name, _arg_exprs), do: :erlang.nif_error(:nif_not_loaded)
@@ -67,6 +70,8 @@ defmodule Egglog.Native do
   def egraph_num_tuples(_egraph), do: :erlang.nif_error(:nif_not_loaded)
   def close_program(_program), do: :erlang.nif_error(:nif_not_loaded)
   def close_egraph(_egraph), do: :erlang.nif_error(:nif_not_loaded)
+  def rows_program(_program, _source, _name, _limit), do: :erlang.nif_error(:nif_not_loaded)
+  def rows_egraph(_graph, _name, _limit), do: :erlang.nif_error(:nif_not_loaded)
   def functions_program(_program), do: :erlang.nif_error(:nif_not_loaded)
   def functions_egraph(_graph), do: :erlang.nif_error(:nif_not_loaded)
   def function_program(_program, _name), do: :erlang.nif_error(:nif_not_loaded)

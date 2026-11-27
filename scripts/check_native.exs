@@ -1,6 +1,6 @@
 # Run with mix run, or elixir -pa PATH/ebin for each relocated runtime dependency.
 {:ok, _} = Application.ensure_all_started(:egglog_elixir)
-alias Egglog.{EGraph, Program, Snapshot}
+alias Egglog.{EGraph, Extraction, Program, Snapshot}
 
 theory = """
 (datatype Math (Num i64) (Add Math Math))
@@ -18,6 +18,9 @@ EGraph.with_egraph(
     {:ok, commands} = EGraph.parse("(rewrite (Add a (Num 0)) a) (run 3)")
     {:ok, _} = EGraph.run(graph, commands)
     "(Num 1)" = EGraph.extract!(graph, "x")
+    extracted = EGraph.extract!(graph, "x", extract_format: :structured)
+    [%{cost: 2}] = extracted.roots
+    {:call, "Num", [{:literal, 1}]} = Extraction.term(extracted)
 
     [%{"left" => %{value: 1}, "right" => %{value: 3}}] =
       EGraph.query!(graph, [left: "i64", right: "i64"], [
@@ -41,6 +44,9 @@ EGraph.with_egraph(
 )
 
 Program.with_program(theory, fn program ->
+  extracted = Program.extract!(program, "", "x", extract_format: :structured, variants: 1)
+  [%{cost: 5}] = extracted.roots
+  {:call, "Add", _} = Extraction.term(extracted)
   [%{}] = Program.query!(program, "(edge 3 4)", [], ["(edge 3 4)"])
   [] = Program.query!(program, "", [], ["(edge 3 4)"])
 end)

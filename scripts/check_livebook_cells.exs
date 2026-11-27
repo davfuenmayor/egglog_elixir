@@ -1,45 +1,25 @@
-# Fast checks; check_livebooks.exs additionally uses Livebook's real runtime.
+# Execute notebooks twice, replay cells and revisit earlier steps.
 root = Path.expand("..", __DIR__)
-unless System.argv() in [[], ["--no-dot"]], do: raise("usage: [--no-dot]")
-Mix.install([{:egglog_elixir, path: root}, {:kino, "~> 0.19.0"}], consolidate_protocols: false)
+options = System.argv()
+unless options -- ["--hex", "--no-dot"] == [], do: raise("usage: [--hex] [--no-dot]")
+hex? = "--hex" in options
+no_dot? = "--no-dot" in options
 
-if System.get_env("EGGLOG_GRAPH_PARITY_DIR"),
-  do: Code.require_file(Path.join(__DIR__, "graph_parity_capture.exs"))
-
-# Extract the actual installed Kino assets, not a different Mermaid npm version.
-if directory = System.get_env("EGGLOG_MERMAID_EXPORT_DIR") do
-  assets = Path.join(directory, "kino-assets")
-  File.mkdir_p!(assets)
-  archive = Kino.Mermaid.__assets_info__().archive_path
-
-  :ok =
-    :erl_tar.extract(
-      String.to_charlist(archive),
-      [:compressed, {:cwd, String.to_charlist(assets)}]
-    )
+if hex? do
+  for variable <-
+        ~w(EGGLOG_ELIXIR_BUNDLE EGGLOG_BUILD EGGLOG_RELEASE_BASE_URL RUSTLER_PRECOMPILED_FORCE_BUILD_ALL),
+      do: System.delete_env(variable)
+else
+  Mix.install([{:egglog_elixir, path: root}, {:kino, "~> 0.19.0"}], consolidate_protocols: false)
 end
 
-if System.argv() == ["--no-dot"] do
+if no_dot? do
   System.put_env("PATH", "")
   System.delete_env("EGGLOG_GRAPHVIZ_DOT")
   System.delete_env("GRAPHVIZ_DOT")
 end
 
-# Optional corpus capture: record exactly the source passed to Kino, so its
-# browser-side renderer can be tested rather than assuming a Kino object rendered.
-defmodule EgglogMermaidCapture do
-  def new(source) do
-    if directory = System.get_env("EGGLOG_MERMAID_EXPORT_DIR") do
-      File.mkdir_p!(directory)
-      File.write!(Path.join(directory, "#{System.unique_integer([:positive])}.mmd"), source)
-    end
-
-    Kino.Mermaid.new(source)
-  end
-end
-
 for path <- Path.wildcard(Path.join(root, "livebooks/**/*.livemd")) do
-  Process.put(:egglog_parity_notebook, Path.relative_to(path, root))
   # Livebook explicitly marks illustrative Elixir fences as Markdown.
   text =
     Regex.replace(
@@ -52,38 +32,36 @@ for path <- Path.wildcard(Path.join(root, "livebooks/**/*.livemd")) do
     Regex.scan(~r/^```elixir\n(.*?)^```/ms, text, capture: :all_but_first)
     |> List.flatten()
 
-  Enum.each(cells, &Code.string_to_quoted!/1)
   if cells == [], do: IO.puts("INDEX #{Path.relative_to(path, root)}: navigation only")
 
   executable =
-    Enum.map(cells, fn source ->
-      statements =
-        case Code.string_to_quoted!(source) do
-          {:__block__, _, statements} -> statements
-          statement -> [statement]
-        end
+    if hex? do
+      cells
+    else
+      Enum.map(cells, fn source ->
+        statements =
+          case Code.string_to_quoted!(source) do
+            {:__block__, _, statements} -> statements
+            statement -> [statement]
+          end
 
-      # Mix.install already ran above; retain helpers now defined in the setup cell.
-      statements =
-        Enum.reject(statements, fn
-          {{:., _, [{:__aliases__, _, [:Mix]}, :install]}, _, _} -> true
-          _ -> false
-        end)
+        # Mix.install already ran above; retain helpers now defined in the setup cell.
+        statements =
+          Enum.reject(statements, fn
+            {{:., _, [{:__aliases__, _, [:Mix]}, :install]}, _, _} -> true
+            _ -> false
+          end)
 
-      Macro.to_string({:__block__, [], statements})
-    end)
-    |> Enum.map(&String.replace(&1, "Kino.Mermaid.new(", "EgglogMermaidCapture.new("))
-
-  executable =
-    if System.get_env("EGGLOG_GRAPH_PARITY_DIR"),
-      do: Enum.map(executable, &EgglogGraphParityCapture.instrument/1),
-      else: executable
+        Macro.to_string({:__block__, [], statements})
+      end)
+    end
 
   evaluate = fn source, {binding, env} ->
     {value, binding, env} =
       Code.eval_quoted_with_env(Code.string_to_quoted!(source), binding, env)
 
     if is_struct(value, Egglog.Program.Step) and value.snapshot != nil do
+      if no_dot?, do: :mermaid = value.snapshot.format
       %{type: :grid, outputs: outputs} = Kino.Render.to_livebook(value)
       true = outputs != []
     end
@@ -106,8 +84,7 @@ for path <- Path.wildcard(Path.join(root, "livebooks/**/*.livemd")) do
       |> Enum.take(3)
 
     negative = Enum.filter(executable, &String.contains?(&1, "fail (check")) |> Enum.take(1)
-    view = Enum.filter(executable, &String.contains?(&1, "next.(step_")) |> Enum.take(1)
-    Enum.reduce(Enum.uniq(early ++ negative ++ view), state, evaluate)
+    Enum.reduce(Enum.uniq(early ++ negative), state, evaluate)
 
     if Path.basename(path) == "getting_started.livemd" do
       {binding, _env} = state

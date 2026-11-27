@@ -196,6 +196,38 @@ defmodule Egglog.NativeBundleTest do
   end
 
   @tag :tmp_dir
+  @tag skip: :os.type() == {:win32, :nt}
+  test "uses curl for an HTTPS connection failure and verifies its bytes", %{tmp_dir: dir} do
+    {archive, _manifest} = release_fixture(dir)
+    {url, listener} = serve("")
+    on_exit(fn -> :gen_tcp.close(listener) end)
+
+    bin = Path.join(dir, "bin")
+    File.mkdir_p!(bin)
+    curl = Path.join(bin, "curl")
+    File.write!(curl, "#!/bin/sh\nexec /bin/cat \"$EGGLOG_TEST_ARCHIVE\"\n")
+    File.chmod!(curl, 0o755)
+    bad_archive = Path.join(dir, "incorrect archive")
+    File.write!(bad_archive, "not the reviewed archive")
+
+    env = [
+      {"EGGLOG_ELIXIR_BUNDLE", nil},
+      {"EGGLOG_CACHE_DIR", Path.join(dir, "cache")},
+      {"EGGLOG_RELEASE_BASE_URL", String.replace_prefix(url, "http://", "https://")},
+      {"PATH", bin <> ":" <> System.fetch_env!("PATH")}
+    ]
+
+    assert {output, status} = install(dir, env ++ [{"EGGLOG_TEST_ARCHIVE", bad_archive}])
+    assert status != 0
+    assert output =~ "checksum mismatch"
+    refute File.exists?(Path.join(dir, "priv/native"))
+
+    {output, status} = install(dir, env ++ [{"EGGLOG_TEST_ARCHIVE", archive}])
+    assert status == 0, output
+    assert File.regular?(Path.join(dir, "priv/native/egglog_nif.#{extension()}"))
+  end
+
+  @tag :tmp_dir
   test "concurrent cold downloads install one verified cache entry", %{tmp_dir: dir} do
     {archive, manifest} = release_fixture(dir)
     {url, listener} = serve(File.read!(archive))
@@ -236,7 +268,11 @@ defmodule Egglog.NativeBundleTest do
     assert output =~ "checksum mismatch"
     refute File.exists?(Path.join(dir, "priv/native"))
     assert_received :download
-    File.write!(Path.join(dir, "native/egglog_nif/Cargo.toml"), "changed")
+
+    File.write!(Path.join(dir, "native/egglog_nif/vendor/egglog/src/lib.rs"), "\n// changed\n", [
+      :append
+    ])
+
     assert {output, status} = install(dir, env)
     assert status != 0
     assert output =~ "Native sources do not match"
@@ -249,7 +285,7 @@ defmodule Egglog.NativeBundleTest do
 
     File.mkdir_p!(Path.join(dir, "native/egglog_nif"))
 
-    for name <- ["src", "Cargo.toml", "Cargo.lock"] do
+    for name <- ["src", "vendor", "Cargo.toml", "Cargo.lock"] do
       File.cp_r!(
         Path.join([@root, "native/egglog_nif", name]),
         Path.join([dir, "native/egglog_nif", name])
@@ -265,6 +301,7 @@ defmodule Egglog.NativeBundleTest do
 
     manifest =
       manifest
+      |> Map.put("release", "v#{@version}")
       |> Map.put("artifacts", %{target() => item})
       |> Map.put("source_sha256", @compiler.source_fingerprint())
 
@@ -314,7 +351,7 @@ defmodule Egglog.NativeBundleTest do
 
   defp project(dir) do
     File.cp!(Path.join(@root, "mix.exs"), Path.join(dir, "mix.exs"))
-    archive = Path.join(dir, "native/precompiled/egglog-#{@version}-#{target()}.tar.gz")
+    archive = Path.join(dir, "bundles/egglog-#{@version}-#{target()}.tar.gz")
     File.mkdir_p!(Path.dirname(archive))
     archive
   end
@@ -356,7 +393,7 @@ defmodule Egglog.NativeBundleTest do
               {"MIX_ENV", "dev"},
               {"EGGLOG_BUILD", nil},
               {"EGGLOG_ELIXIR_BUNDLE",
-               Path.join(dir, "native/precompiled/egglog-#{@version}-#{target()}.tar.gz")},
+               Path.join(dir, "bundles/egglog-#{@version}-#{target()}.tar.gz")},
               {"RUSTLER_PRECOMPILED_FORCE_BUILD_ALL", nil}
             ]),
             Map.new(extra_env)

@@ -96,30 +96,19 @@ defmodule Egglog.EGraph do
       snapshot should split primitive outputs into separate classes before
       producing DOT or JSON text. Defaults to `false`.
 
-    * `:path` - optional file path where the returned `:text` payload is
-      written. Defaults to unset.
-
-    * `:dot_path` - optional file path where DOT is written when DOT text is
-      available. Defaults to unset. For JSON/Mermaid renders, this key is recorded
-      as `nil` if provided because no DOT text is produced.
-
-    * `:svg_path` - optional file path where SVG is written when SVG rendering
-      succeeds. Defaults to unset. For non-SVG renders, this key is recorded as
-      `nil` if provided.
-
-    * `:mermaid_path` - optional destination for Mermaid source (.mmd).
-      It is nil on renders that do not produce Mermaid. Mermaid snapshots also
-      retain native JSON, so json_path exports that same input.
-
-    * `:json_path` - optional file path where JSON is written when
-      JSON or Mermaid rendering is used. Defaults to unset. Otherwise, this
-      key is recorded as `nil` if provided.
+    * `:path` - writes the selected view. `:dot_path` and `:json_path` write
+      either retained native format. `:svg_path` and `:mermaid_path` require
+      the matching rendered view. Unavailable formats and write failures return
+      the retained snapshot and paths already written. See `Egglog.Snapshot.render/2`.
 
   The returned snapshot map contains:
 
     * `:format` - one of `:dot`, `:svg`, `:json`, or `:mermaid`.
     * `:text` - the primary payload for the selected render.
-    * `:dot`, `:svg`, `:json`, or `:mermaid` - the format-specific payload when present.
+    * `:dot`, `:json` - matching native payloads from one serialization.
+    * `:svg`, `:mermaid` - the selected rendered payload, when applicable.
+    * `:rendering` - renderer choice and automatic fallback diagnostics.
+    * `:complete`, `:truncated_functions`, `:discarded_functions` - native omission data.
     * `:omitted` - native omission metadata for capped snapshots.
     * `:stats` - snapshot-specific native stats, currently
       `:snapshot_nodes` and `:snapshot_classes` when available.
@@ -206,19 +195,21 @@ defmodule Egglog.EGraph do
   """
 
   @extract_doc """
-  Extracts the cheapest native egglog term for `expr` in the current session.
+  Extracts native egglog terms for `expr`.
 
-  Supported options:
+    * `:extract_format` — `:text` (default) or `:structured`.
+    * `:variants` — a positive number of root alternatives; by default extract
+      only the cheapest term. Variants retain upstream ordering.
 
-    * `:variants` - optional value inserted as the second argument to native
-      egglog's `(extract expr variants)` command. Defaults to unset, which uses
-      `(extract expr)`.
+  Text mode accepts all `run/3` options and returns the last extraction text.
+  Missing or truncated extraction output returns an error.
 
-  All `run/3` options are also accepted and passed through to the internal
-  extract run. Defaults are the `run/3` defaults. Snapshot and output options
-  may affect the internal run, but `extract/3` returns only the last extraction text. Missing or truncated extraction output returns an error.
-
-  String option keys are also accepted, matching the rest of the wrapper.
+  Structured mode returns the native DAG and per-root costs documented in
+  `Egglog.Extraction`. It retains native term data, without printing
+  or parsing extracted terms. It uses the current mutable graph; evaluating
+  the expression can add terms, just as native extraction commands do.
+  Snapshot and output-limit options are rejected in structured mode.
+  String option keys and values are accepted.
   """
 
   @doc """
@@ -251,6 +242,7 @@ defmodule Egglog.EGraph do
       False values are `false`, `"false"`, `"0"`, and `0`; other values return an error.
 
   String option keys are also accepted, matching the rest of the wrapper.
+  Set `:error_details` to opt into structured non-parser errors. See `Egglog`.
   """
   def new(source \\ "", opts \\ []) when is_binary(source) do
     Options.with_options(opts, :graph_load, fn opts ->
@@ -261,7 +253,8 @@ defmodule Egglog.EGraph do
                source: source,
                proofs?: proofs?,
                num_threads: Common.get(opts, :num_threads, 1),
-               owner: self()
+               owner: self(),
+               error_details: Common.get(opts, :error_details, false)
              ) do
         {:ok, %__MODULE__{pid: pid, name: Common.get(opts, :name)}}
       end
@@ -310,6 +303,7 @@ defmodule Egglog.EGraph do
       with {:ok, %{source: source}} <- graph_input(input) do
         program = source
         snapshot = Common.snapshot_options(opts)
+
         Server.call(pid, {:run, program, snapshot, Common.get(opts, :output_limit)})
       end
     end)
@@ -365,9 +359,17 @@ defmodule Egglog.EGraph do
   @doc @extract_doc
   def extract(%__MODULE__{} = egraph, expr, opts \\ []) when is_binary(expr) do
     Options.with_options(opts, :graph_extract, fn opts ->
-      egraph
-      |> run(Common.extract_request(expr, opts), Map.delete(opts, :variants))
-      |> Common.extraction()
+      {format, opts} = Map.pop(opts, :extract_format, :text)
+
+      if format == :structured do
+        Options.with_options(opts, :graph_structured_extract, fn opts ->
+          Server.call(egraph.pid, {:extract, expr, Common.get(opts, :variants)})
+        end)
+      else
+        egraph
+        |> run(Common.extract_request(expr, opts), Map.delete(opts, :variants))
+        |> Common.extraction()
+      end
     end)
   end
 
@@ -485,6 +487,24 @@ defmodule Egglog.EGraph do
 
   @doc "Bang variant of `functions/1`."
   def functions!(graph), do: functions(graph) |> Common.bang("failed to inspect egglog functions")
+
+  @doc """
+  Inspects existing native table rows without inserting terms.
+
+  Returns `{:ok, %{rows: rows, truncated: boolean}}`. Each row has typed `:inputs`,
+  typed `:output` and `:subsumed`. Constructors and relations return their native
+  e-class as output. `:limit` defaults to 100; at most one extra row is
+  visited to detect truncation. Order and native value IDs are not persistent.
+  """
+  def rows(%__MODULE__{pid: pid}, name, opts \\ []) when is_binary(name) do
+    Options.with_options(opts, :graph_rows, fn opts ->
+      Server.call(pid, {:rows, name, Common.get(opts, :limit, 100)})
+    end)
+  end
+
+  @doc "Bang variant of `rows/3`."
+  def rows!(graph, name, opts \\ []),
+    do: rows(graph, name, opts) |> Common.bang("failed to inspect table")
 
   @doc "Returns the native declaration map described by `functions/1`, or `{:ok, nil}` for an unknown name."
   def function(%__MODULE__{pid: pid}, name) when is_binary(name),

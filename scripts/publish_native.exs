@@ -1,5 +1,7 @@
 # Run after committing/tagging the release and packaging its native artifact:
-# MIX_ENV=prod mix run scripts/publish_native.exs
+# EGGLOG_ARTIFACT_DIR=... elixir scripts/publish_native.exs
+Mix.start()
+Code.require_file("mix.exs")
 version = Mix.Project.config()[:version]
 tag = "v#{version}"
 
@@ -57,14 +59,6 @@ case System.cmd(gh, ["release", "view", tag, "--repo", repo], stderr_to_stdout: 
   _ -> :ok
 end
 
-notes = Path.join("dist", "release_notes.md")
-File.mkdir_p!("dist")
-
-File.write!(
-  notes,
-  "Egglog Elixir #{version}\n\nNative egglog bindings. See CHANGELOG.md and API_COVERAGE.md at this tag.\n"
-)
-
 run!.(
   gh,
   [
@@ -77,8 +71,8 @@ run!.(
     "--verify-tag",
     "--title",
     "Egglog Elixir #{version}",
-    "--notes-file",
-    notes
+    "--notes",
+    "See [CHANGELOG.md](https://github.com/#{repo}/blob/#{tag}/CHANGELOG.md) for changes."
   ] ++ Enum.flat_map(archives, &[&1, &1 <> ".sha256", &1 <> ".json"])
 )
 

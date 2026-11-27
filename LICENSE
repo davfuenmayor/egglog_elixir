@@ -23,6 +23,6 @@ SOFTWARE.
 Third-party material
 
 The license above covers original wrapper code. The linked egglog library
-retains its upstream MIT notice in native/egglog_nif/LICENSE-EGGLOG-MIT.
+retains its upstream MIT notice in native/egglog_nif/vendor/egglog/LICENSE.
 Tutorial adaptations retain the attribution recorded in their tutorial README.
 Other dependencies retain their respective licenses.

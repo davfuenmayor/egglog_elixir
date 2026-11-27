@@ -1,12 +1,25 @@
 # Changelog
 
-## Unreleased (0.2.0)
+## v0.3.0
+
+- Inspect bounded, typed table rows on both execution models.
+- Opt into native error categories, names and source locations with `error_details: true`.
+- Retain matching DOT and JSON in snapshots, rerender without rerunning egglog,
+  report Graphviz fallback, and write exports atomically per file.
+- Add opt-in structured extraction through `extract_format: :structured`: native
+  DAG nodes, roots and exact costs for best terms and variants, including in
+  proof mode. Use `Egglog.Extraction.term/2` for nested terms.
+- Update egglog 3.0.0 from `b912caa` to `d89bc58` for improvements to extraction,
+  parsing, queries and table compaction.
+- Install the public Livebooks directly from Hex. Retry native HTTPS downloads
+  with system `curl` if available and verify the same pinned checksum.
+
+## v0.2.0
 
 - Remove native archives from Git/Hex. Add a source-bound checksum manifest,
   verified HTTPS downloads, an external cache and explicit offline/source overrides.
   Build outside the checkout; add native five-platform CI, draft-release validation
-  and a Hex package size/binary exclusion check. Mac delivery and public release
-  downloads remain pending real runner results and publication.
+  and a Hex package size/binary exclusion check.
 
 - Pin native egglog 3.0.0 revision `b912caa9694c0c029f9ae3d91db0adc8824e14f5`.
   Add declaration inspection, typed pattern queries, table clearing and per-graph

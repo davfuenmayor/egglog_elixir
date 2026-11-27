@@ -92,9 +92,10 @@ defmodule Egglog.GraphvizTest do
     assert Egglog.Graphviz.executable() == nil
 
     EGraph.with_egraph("(relation seen (i64)) (seen 1)", fn graph ->
-      assert {:ok, %{format: :mermaid, json: json, mermaid: source, dot: nil}} =
+      assert {:ok, %{format: :mermaid, json: json, mermaid: source, dot: dot}} =
                EGraph.snapshot(graph, render: :auto, path: Path.join(dir, "view.mmd"))
 
+      assert dot =~ "digraph"
       assert Jason.decode!(json)["nodes"] != %{}
       assert source =~ "flowchart"
       assert File.read!(Path.join(dir, "view.mmd")) == source

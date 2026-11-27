@@ -2,10 +2,7 @@
 
 ```elixir
 Mix.install(
-  [
-    {:egglog_elixir, path: Path.expand("../..", __DIR__)},
-    {:kino, "~> 0.19.0"}
-  ],
+  [{:egglog_elixir, "0.3.0"}, {:kino, "~> 0.19.0"}],
   consolidate_protocols: false
 )
 

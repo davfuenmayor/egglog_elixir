@@ -172,14 +172,8 @@ defmodule Egglog.MermaidTest do
        }}
     ]
 
-    for {name, graph} <- graphs do
+    for {_name, graph} <- graphs do
       source = Snapshot.to_mermaid!(graph)
-
-      if directory = System.get_env("EGGLOG_MERMAID_EXPORT_DIR") do
-        File.mkdir_p!(directory)
-        File.write!(Path.join(directory, "fixture-#{name}.mmd"), source)
-        File.write!(Path.join(directory, "fixture-#{name}.json"), Jason.encode!(graph))
-      end
 
       assert source =~ "flowchart TB"
     end
@@ -217,8 +211,7 @@ defmodule Egglog.MermaidTest do
       assert File.read!(snapshot.path) == snapshot.mermaid
       assert File.read!(snapshot.mermaid_path) == snapshot.mermaid
       assert File.read!(snapshot.json_path) == snapshot.json
-      assert snapshot.dot_path == nil
-      refute File.exists?(Path.join(dir, "unused.dot"))
+      assert File.read!(snapshot.dot_path) == snapshot.dot
       assert snapshot.mermaid =~ "let a"
       assert snapshot.mermaid =~ "let f"
       # Query-local snapshots still leave the loaded base unchanged.

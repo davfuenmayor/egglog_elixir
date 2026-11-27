@@ -30,6 +30,7 @@ impl Resource for EGraphResource {}
 
 pub struct ParsedProgramResource {
     pub commands: Vec<Command>,
+    pub source: String,
 }
 
 #[rustler::resource_impl]
@@ -47,7 +48,7 @@ pub fn load_egraph(source: &str, proofs: bool, num_threads: usize) -> Result<EGr
     if !source.trim().is_empty() {
         egraph
             .parse_and_run_program(None, source)
-            .map_err(NativeError::invalid_theory)?;
+            .map_err(|error| NativeError::invalid_theory(error).context("load", source))?;
     }
 
     Ok(egraph)

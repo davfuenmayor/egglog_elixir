@@ -2,12 +2,14 @@
 Mix.start()
 Code.require_file("mix.exs")
 [directory, release] = System.argv()
+version = Mix.Project.config()[:version]
+unless release == "v#{version}", do: raise("Expected release tag v#{version}")
 source = Mix.Tasks.Compile.EgglogNative.source_fingerprint()
 targets = ~w(linux-x86_64 linux-aarch64 windows-x86_64 macos-x86_64 macos-aarch64)
 
 artifacts =
   Map.new(targets, fn target ->
-    file = "egglog-#{Mix.Project.config()[:version]}-#{target}.tar.gz"
+    file = "egglog-#{version}-#{target}.tar.gz"
     path = Path.join(directory, file)
     metadata = (path <> ".json") |> File.read!() |> JSON.decode!()
     hash = :crypto.hash(:sha256, File.read!(path)) |> Base.encode16(case: :lower)

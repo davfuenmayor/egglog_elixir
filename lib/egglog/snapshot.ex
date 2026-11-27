@@ -8,6 +8,30 @@ defmodule Egglog.Snapshot do
   """
 
   @doc """
+  Renders retained DOT/JSON without executing egglog. Accepts a snapshot or a run
+  result containing one. Options: `:render`, `:render_timeout` and artifact paths.
+  Native DOT and JSON always remain available. `:rendering` records the selected
+  executable and automatic fallback reason. Explicit SVG errors remain errors.
+
+  Artifact writes replace each file atomically. An error returns
+  `{:error, {:snapshot_io, path, %{reason: reason, snapshot: snapshot, artifacts: paths}}}`;
+  paths identify only this call's completed writes. Multiple files are not a
+  transaction. Requesting an unavailable format fails rather than silently skipping it.
+  """
+  def render(snapshot, opts \\ [])
+  def render(%{result: result}, opts), do: render(result, opts)
+
+  def render(result, opts) do
+    Egglog.Options.with_options(opts, :snapshot_render, fn opts ->
+      Egglog.Common.snapshot_from_result(result, opts, Egglog.Common.get(opts, :render, :auto))
+    end)
+  end
+
+  @doc "Bang variant of `render/2`."
+  def render!(snapshot, opts \\ []),
+    do: render(snapshot, opts) |> Egglog.Common.bang("failed to render snapshot")
+
+  @doc """
   Decodes an egglog JSON snapshot.
 
   Accepts a raw JSON string, a snapshot map returned by `Egglog.snapshot/3`, or

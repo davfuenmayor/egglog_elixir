@@ -5,18 +5,26 @@
 /doc/
 /tmp/
 
-# Rustler / native build artifacts
+# Native builds and release bundles
 /priv/native/
 /native/**/target/
+/artifacts/
+/dist/
+egglog-*.tar.gz
+egglog-*.tar.gz.sha256
+egglog-*.tar.gz.json
+egglog-*.tar.gz.imports.txt
+egglog_nif.dll
+egglog_nif.so
+libegglog_nif.so
+libegglog_nif.dylib
+egglog_libgcc_s.so.1
 
-# Package/archive outputs
+# Hex and Mix archives
 /*.ez
+/egglog.tar
 /egglog_elixir-*.tar
 /egglog_elixir-*/
-
-# Native binaries stay outside Git; checksums live in native/manifest.json
-/native/precompiled/*
-!/native/precompiled/README.md
 
 # Crash dumps and runtime logs
 erl_crash.dump
@@ -29,8 +37,9 @@ livebook_import/
 livebook_uploads/
 *.livemd.autosave
 
-# Elixir language server and editor state
+# Elixir language servers and editors
 /.elixir_ls/
+/.expert/
 .vscode/
 .idea/
 *.swp
@@ -41,10 +50,3 @@ livebook_uploads/
 Thumbs.db
 Desktop.ini
 *.exe.stackdump
-
-# Release staging and local tooling state
-/dist/
-/.expert/
-
-# Dev-only native DOT comparison oracle
-/scripts/native_graphviz/target/

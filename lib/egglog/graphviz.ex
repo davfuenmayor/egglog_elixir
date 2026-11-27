@@ -11,9 +11,7 @@ defmodule Egglog.Graphviz do
     end) || System.find_executable("dot")
   end
 
-  def render(input, output, timeout) do
-    executable = executable()
-
+  def render(input, output, timeout, executable \\ executable()) do
     port =
       Port.open({:spawn_executable, executable}, [
         :binary,

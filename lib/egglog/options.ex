@@ -24,16 +24,21 @@ defmodule Egglog.Options do
            :budget
          ] ++ @snapshot
   @profiles %{
-    graph_load: [:name, :proofs, :num_threads],
-    program_load: [:name, :proofs, :modes, :default_budget, :num_threads],
+    graph_load: [:name, :proofs, :num_threads, :error_details],
+    program_load: [:name, :proofs, :modes, :default_budget, :num_threads, :error_details],
     graph_run: @run,
     program_run: @run ++ [:mode, :budget],
     graph_snapshot: @run ++ @artifacts,
+    snapshot_render: @artifacts,
     program_snapshot: @run ++ @artifacts ++ [:mode, :budget],
-    graph_extract: @run ++ [:variants],
-    program_extract: @run ++ [:variants, :mode, :budget],
+    graph_extract: @run ++ [:variants, :extract_format],
+    graph_structured_extract: [:variants],
+    program_extract: @run ++ [:variants, :mode, :budget, :extract_format],
+    program_structured_extract: [:variants, :mode, :budget],
     program_query: [:mode, :budget],
-    thread_settings: [:num_threads]
+    thread_settings: [:num_threads],
+    graph_rows: [:limit],
+    program_rows: [:limit, :mode, :budget]
   }
 
   def with_options(opts, profile, fun) do
@@ -75,7 +80,8 @@ defmodule Egglog.Options do
   defp normalize(key, value) when key in [:budget, :default_budget],
     do: validate(value, [:rounds, :output_limit])
 
-  defp normalize(key, value) when key in [:proofs, :snapshot_split_primitive_outputs] do
+  defp normalize(key, value)
+       when key in [:proofs, :snapshot_split_primitive_outputs, :error_details] do
     case value do
       value when value in [true, "true", "1", 1] -> {:ok, true}
       value when value in [false, "false", "0", 0] -> {:ok, false}
@@ -101,7 +107,7 @@ defmodule Egglog.Options do
     end
   end
 
-  defp normalize(key, value) when key in [:output_limit, :variants, :count],
+  defp normalize(key, value) when key in [:output_limit, :variants, :count, :limit],
     do: count(value, 1)
 
   defp normalize(:snapshot, value)
@@ -125,6 +131,11 @@ defmodule Egglog.Options do
               "mermaid"
             ],
        do: {:ok, value}
+
+  defp normalize(:extract_format, value) when value in [:text, "text"], do: {:ok, :text}
+
+  defp normalize(:extract_format, value) when value in [:structured, "structured"],
+    do: {:ok, :structured}
 
   defp normalize(:mode, value) when is_atom(value) or is_binary(value), do: {:ok, value}
 
@@ -200,7 +211,6 @@ defmodule Egglog.Options do
        do: {:ok, value}
 
   defp normalize(:expr, value) when is_binary(value), do: {:ok, value}
-  defp normalize(:limit, value), do: count(value, 1)
   defp normalize(_, _), do: :error
 
   defp request(source) when is_binary(source), do: {:ok, source}

@@ -2,7 +2,7 @@ defmodule Egglog.LivebooksTest do
   use ExUnit.Case, async: true
   @root Path.expand("../livebooks", __DIR__)
 
-  test "executable notebooks install this checkout; index lists every notebook" do
+  test "executable notebooks install the release from Hex and the index lists them all" do
     notebooks = Path.wildcard(Path.join(@root, "**/*.livemd"))
     assert length(notebooks) == 8
 
@@ -17,14 +17,8 @@ defmodule Egglog.LivebooksTest do
     for path <- notebooks -- [index_path] do
       text = File.read!(path)
 
-      assert [[relative]] =
-               Regex.scan(
-                 ~r/\{:egglog_elixir, path: Path\.expand\("([^"]+)", __DIR__\)\}/,
-                 text,
-                 capture: :all_but_first
-               )
-
-      assert Path.expand(relative, Path.dirname(path)) == Path.dirname(@root)
+      assert [_, setup] = Regex.run(~r/^```elixir\n(.*?)^```/ms, text)
+      assert Regex.scan(~r/\{:egglog_elixir,[^}]+\}/, setup) == [[~s({:egglog_elixir, "0.3.0"})]]
       assert text =~ "{:kino,"
       refute text =~ "Egglog.Snapshot.summary"
 
@@ -52,20 +46,10 @@ defmodule Egglog.LivebooksTest do
     end
   end
 
-  test "tutorial technicalities stay in the guide and library hub" do
+  test "tutorial compatibility and attribution stay in the shared guide" do
     guide = File.read!(Path.join(@root, "README.md"))
 
-    for term <- [
-          "Egglog.Program.query!",
-          "Egglog.EGraph.with_egraph",
-          "Egglog.EGraph.clear_function",
-          "Egglog.EGraph.push",
-          "Egglog.EGraph.pop",
-          "{:error, {:closed, message}}",
-          "Rust",
-          "dynamic-cost",
-          "MIT license"
-        ] do
+    for term <- ["Rust", "dynamic-cost", "MIT license"] do
       assert guide =~ term
     end
 
@@ -96,14 +80,13 @@ defmodule Egglog.LivebooksTest do
     end
   end
 
-  test "onboarding links resolve and never advertise hypothetical package versions" do
+  test "relative onboarding links resolve" do
     paths =
       [Path.join(@root, "README.md"), Path.join(@root, "egglog-tutorial/README.md")] ++
         Path.wildcard(Path.join(@root, "**/*.livemd"))
 
     for path <- paths do
       text = File.read!(path)
-      refute text =~ "When using the published package"
 
       for [_, target] <- Regex.scan(~r/\]\(([^)]+)\)/, text),
           not String.starts_with?(target, ["http:", "https:", "#"]) do

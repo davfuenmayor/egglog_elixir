@@ -43,10 +43,14 @@ defmodule Egglog do
   sequence, or an included file. Structured requests may generate command
   prefixes; offsets are not remapped onto individual input fields.
 
-  Other errors retain `{:error, {reason, message}}` (or their documented
-  wrapper-specific shapes). Bang functions still raise `RuntimeError` and
-  include the structured diagnostic. Failed native equality checks keep their
-  existing `:check_failed` category; check helpers still return `{:ok, false}`.
+  By default, non-parser errors retain `{:error, {reason, message}}` or their
+  documented wrapper-specific shape. Set `error_details: true` when creating an
+  EGraph or loading a Program for `{:error, {reason, message, details}}` on
+  native egglog errors. The details include category and stage strings, optional
+  request source, names grouped by kind, and locations with their own source text.
+  Coordinates follow the parser conventions above. A diagnostic describes the
+  failure and carries no rollback guarantee. Failed native checks still give
+  `{:ok, false}` through the check helpers. Bang helpers raise `RuntimeError`.
 
   Native command text and schedules remain egglog's own language; the wrapper
   does not implement an optimizer or a second execution engine.
@@ -122,7 +126,8 @@ defmodule Egglog do
   defdelegate check_fail(program, input, fact, opts \\ []), to: Program
 
   @doc """
-  Extracts the cheapest native egglog term for an expression.
+  Extracts native egglog terms as text or, with `extract_format: :structured`,
+  a DAG with native costs. See `Egglog.Extraction` for the result shape.
 
   See `Egglog.Program.extract/4` for supported options and defaults.
   """
@@ -193,6 +198,11 @@ defmodule Egglog do
   Closes the loaded program.
   """
   defdelegate close(program), to: Program
+  @doc "Inspects query-local table rows. See `Egglog.Program.rows/4`."
+  defdelegate rows(program, input, name, opts \\ []), to: Program
+  @doc "Bang variant of `rows/4`."
+  defdelegate rows!(program, input, name, opts \\ []), to: Program
+
   @doc "Inspects the native base declarations. See `Egglog.Program.functions/1`."
   defdelegate functions(program), to: Program
   @doc "Bang variant of `functions/1`."

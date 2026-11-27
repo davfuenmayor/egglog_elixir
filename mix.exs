@@ -4,7 +4,7 @@ defmodule EgglogElixir.MixProject do
   def project do
     [
       app: :egglog_elixir,
-      version: "0.2.0",
+      version: "0.3.0",
       elixir: "~> 1.19",
       name: "EgglogElixir",
       description: "Thin Elixir wrapper around the native Rust egglog engine.",
@@ -35,11 +35,6 @@ defmodule EgglogElixir.MixProject do
       extras: [
         "README.md",
         "CHANGELOG.md",
-        "API_COVERAGE.md",
-        "KNOWN_ISSUES.md",
-        "egglog_elixir_improvements.md",
-        "MULTIPLATFORM.md",
-        "MAINTAINING.md",
         "livebooks/README.md",
         "livebooks/egglog-tutorial/LICENSE-UPSTREAM.md",
         "livebooks/index.livemd",
@@ -63,17 +58,13 @@ defmodule EgglogElixir.MixProject do
       licenses: ["MIT"],
       build_tools: ["mix"],
       links: %{
+        "GitHub" => "https://github.com/davfuenmayor/egglog_elixir",
         "Upstream egglog" => "https://github.com/egraphs-good/egglog",
         "Tutorial" => "https://egraphs-good.github.io/egglog-tutorial/"
       },
       files: [
         ".formatter.exs",
         "CHANGELOG.md",
-        "API_COVERAGE.md",
-        "KNOWN_ISSUES.md",
-        "egglog_elixir_improvements.md",
-        "MULTIPLATFORM.md",
-        "MAINTAINING.md",
         "native/manifest.json",
         "LICENSE",
         "README.md",
@@ -83,8 +74,12 @@ defmodule EgglogElixir.MixProject do
         "native/egglog_nif/Cargo.lock",
         "native/egglog_nif/Cargo.toml",
         "native/egglog_nif/src",
-        "native/egglog_nif/LICENSE-EGGLOG-MIT",
-        "scripts"
+        "native/egglog_nif/vendor/egglog/src",
+        "native/egglog_nif/vendor/egglog/Cargo.toml",
+        "native/egglog_nif/vendor/egglog/LICENSE",
+        "native/egglog_nif/vendor/egglog/README.md",
+        "scripts/build_native.sh",
+        "scripts/native_notices.exs"
       ]
     ]
   end
@@ -92,6 +87,8 @@ end
 
 defmodule Mix.Tasks.Compile.EgglogNative do
   use Mix.Task.Compiler
+
+  @release_base "https://github.com/davfuenmayor/egglog_elixir/releases/download"
 
   def run(_) do
     built =
@@ -208,7 +205,12 @@ defmodule Mix.Tasks.Compile.EgglogNative do
     paths =
       Enum.sort(
         Path.wildcard("native/egglog_nif/src/**/*.rs") ++
-          ["native/egglog_nif/Cargo.toml", "native/egglog_nif/Cargo.lock"]
+          Path.wildcard("native/egglog_nif/vendor/egglog/src/**/*.{rs,md}") ++
+          [
+            "native/egglog_nif/Cargo.toml",
+            "native/egglog_nif/Cargo.lock",
+            "native/egglog_nif/vendor/egglog/Cargo.toml"
+          ]
       )
 
     :crypto.hash(:sha256, Enum.map(paths, &[&1, <<0>>, File.read!(&1), <<0>>]))
@@ -224,15 +226,20 @@ defmodule Mix.Tasks.Compile.EgglogNative do
 
   defp release_bundle(target) do
     manifest = "native/manifest.json" |> File.read!() |> JSON.decode!()
+    release = "v#{Mix.Project.config()[:version]}"
+
+    unless manifest["release"] == release,
+      do:
+        Mix.raise(
+          "Native manifest does not describe #{release}. Use EGGLOG_BUILD=1 for development."
+        )
 
     unless manifest["schema"] == 1 and manifest["source_sha256"] == source_fingerprint(),
       do: Mix.raise("Native sources do not match the artifact manifest; use EGGLOG_BUILD=1")
 
     artifact =
       manifest["artifacts"][target] ||
-        Mix.raise(
-          "No reviewed release artifact for #{target}; use EGGLOG_BUILD=1. See MULTIPLATFORM.md"
-        )
+        Mix.raise("No reviewed release artifact for #{target}; use EGGLOG_BUILD=1. See README.md")
 
     %{"file" => file, "sha256" => hash} = artifact
 
@@ -246,52 +253,35 @@ defmodule Mix.Tasks.Compile.EgglogNative do
     path = Path.join([cache, hash, file])
 
     unless valid_archive?(path, hash) do
-      base =
-        System.get_env("EGGLOG_RELEASE_BASE_URL") ||
-          "https://github.com/davfuenmayor/egglog_elixir/releases/download"
+      base = System.get_env("EGGLOG_RELEASE_BASE_URL", @release_base)
+      suffix = "/#{manifest["release"]}/#{file}"
 
-      url = String.trim_trailing(base, "/") <> "/" <> manifest["release"] <> "/" <> file
-      download_archive!(url, path, hash)
+      download_archive!(
+        String.trim_trailing(base, "/") <> suffix,
+        @release_base <> suffix,
+        path,
+        hash
+      )
     end
 
     {path, hash}
   end
 
-  defp download_archive!(url, path, hash) do
+  defp download_archive!(url, release_url, path, hash) do
     uri = URI.parse(url)
 
     unless uri.scheme == "https" or
              (uri.scheme == "http" and uri.host in ["127.0.0.1", "localhost"]),
            do: Mix.raise("Artifact downloads require HTTPS")
 
-    {:ok, _} = Application.ensure_all_started(:inets)
-    {:ok, _} = Application.ensure_all_started(:ssl)
-
-    ssl = [
-      verify: :verify_peer,
-      cacerts: :public_key.cacerts_get(),
-      customize_hostname_check: [match_fun: :public_key.pkix_verify_hostname_match_fun(:https)]
-    ]
-
     data =
-      case :httpc.request(
-             :get,
-             {String.to_charlist(url), []},
-             [ssl: ssl, timeout: 60_000, connect_timeout: 10_000],
-             body_format: :binary
-           ) do
-        {:ok, {{_, 200, _}, _, data}} ->
-          data
-
-        result ->
-          Mix.raise(
-            "Cannot download reviewed Egglog artifact #{url}: #{inspect(result)}. " <>
-              "Publish matching release assets or use EGGLOG_ELIXIR_BUNDLE / EGGLOG_BUILD=1"
-          )
+      with {:ok, data} <- fetch_archive(url, uri.scheme),
+           true <- Base.encode16(:crypto.hash(:sha256, data), case: :lower) == hash do
+        data
+      else
+        false -> download_error!(url, release_url, "Downloaded archive checksum mismatch")
+        {:error, reason} -> download_error!(url, release_url, reason)
       end
-
-    unless Base.encode16(:crypto.hash(:sha256, data), case: :lower) == hash,
-      do: Mix.raise("Downloaded Egglog archive checksum mismatch")
 
     File.mkdir_p!(Path.dirname(path))
     temporary = path <> ".#{System.pid()}.#{System.unique_integer([:positive])}.tmp"
@@ -322,6 +312,64 @@ defmodule Mix.Tasks.Compile.EgglogNative do
     end
   end
 
+  defp fetch_archive(url, scheme) do
+    case http_download(url) do
+      {:ok, {{_, 200, _}, _, data}} -> {:ok, data}
+      {:ok, {{_, status, _}, _, _}} -> {:error, "HTTP #{status}"}
+      {:error, reason} when scheme == "https" -> curl_download(url, reason)
+      {:error, reason} -> {:error, inspect(reason)}
+    end
+  end
+
+  defp http_download(url) do
+    with {:ok, _} <- Application.ensure_all_started(:inets),
+         {:ok, _} <- Application.ensure_all_started(:ssl) do
+      ssl = [
+        verify: :verify_peer,
+        cacerts: :public_key.cacerts_get(),
+        customize_hostname_check: [match_fun: :public_key.pkix_verify_hostname_match_fun(:https)]
+      ]
+
+      :httpc.request(
+        :get,
+        {String.to_charlist(url), []},
+        [ssl: ssl, timeout: 60_000, connect_timeout: 10_000],
+        body_format: :binary
+      )
+    end
+  rescue
+    error -> {:error, Exception.message(error)}
+  end
+
+  defp curl_download(url, reason) do
+    case System.find_executable("curl") do
+      nil ->
+        {:error, inspect(reason)}
+
+      curl ->
+        args = ~w(-q -fsSL --proto =https --proto-redir =https --connect-timeout 10 --max-time 60)
+
+        case System.cmd(curl, args ++ ["--", url]) do
+          {data, 0} -> {:ok, data}
+          {_, status} -> {:error, "#{inspect(reason)} (curl exit #{status})"}
+        end
+    end
+  rescue
+    error in ErlangError -> {:error, "#{inspect(reason)} (#{Exception.message(error)})"}
+  end
+
+  defp download_error!(url, release_url, reason) do
+    Mix.raise("""
+    Cannot download reviewed Egglog artifact from #{url}
+    #{reason}
+
+    For a manual install, save both files in the same directory:
+      #{release_url}
+      #{release_url}.sha256
+    Set EGGLOG_ELIXIR_BUNDLE to the archive path before running Mix.install.
+    """)
+  end
+
   def clean do
     File.rm_rf!("priv/native")
     :ok
@@ -347,7 +395,7 @@ defmodule Mix.Tasks.Compile.EgglogNative do
         "windows-x86_64"
 
       _ ->
-        Mix.raise("Unsupported Egglog platform: #{inspect(os)} / #{arch}. See MULTIPLATFORM.md")
+        Mix.raise("Unsupported Egglog platform: #{inspect(os)} / #{arch}. See README.md")
     end
   end
 end

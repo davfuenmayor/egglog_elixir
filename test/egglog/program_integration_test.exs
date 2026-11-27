@@ -709,7 +709,7 @@ defmodule Egglog.ProgramIntegrationTest do
     assert dot_snapshot.dot =~ "digraph"
     assert dot_snapshot.text == dot_snapshot.dot
     assert dot_snapshot.svg == nil
-    assert dot_snapshot.json == nil
+    assert Jason.decode!(dot_snapshot.json)["nodes"] != %{}
     assert dot_snapshot.stats.snapshot_nodes > 0
     assert output_text(dot_snapshot.result, :extract) =~ "Pair"
 
@@ -721,7 +721,7 @@ defmodule Egglog.ProgramIntegrationTest do
 
     assert json_snapshot.format == :json
     assert json_snapshot.json == json_snapshot.text
-    assert json_snapshot.dot == nil
+    assert json_snapshot.dot =~ "digraph"
     assert json_snapshot.svg == nil
 
     decoded = Jason.decode!(json_snapshot.json)
@@ -747,7 +747,7 @@ defmodule Egglog.ProgramIntegrationTest do
         Egglog.snapshot!(program, input,
           render: :auto,
           dot_path: dot_path,
-          svg_path: svg_path,
+          svg_path: if(Egglog.Graphviz.executable(), do: svg_path),
           snapshot_inline_leaves: 1
         )
 
@@ -758,11 +758,11 @@ defmodule Egglog.ProgramIntegrationTest do
         assert File.read!(svg_path) == snapshot.svg
       else
         assert snapshot.format == :mermaid
-        assert snapshot.dot == nil
-        assert snapshot.dot_path == nil
+        assert is_binary(snapshot.dot)
+        assert File.read!(snapshot.dot_path) == snapshot.dot
         assert snapshot.mermaid =~ "flowchart"
         assert snapshot.svg == nil
-        assert snapshot.svg_path == nil
+        refute Map.has_key?(snapshot, :svg_path)
       end
 
       json_snapshot =

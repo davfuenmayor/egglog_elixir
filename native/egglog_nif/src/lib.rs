@@ -9,6 +9,7 @@ use egglog::EGraph;
 use rustler::{Encoder, Env, ResourceArc, Term};
 
 mod error;
+mod extraction;
 mod inspect;
 mod report;
 mod resources;
@@ -39,7 +40,7 @@ fn parse_program<'a>(env: Env<'a>, source: String) -> Term<'a> {
             .parse_program(None, &source)
             .map_err(NativeError::invalid_theory)?;
         let count = commands.len() as i64;
-        let resource = ResourceArc::new(ParsedProgramResource { commands });
+        let resource = ResourceArc::new(ParsedProgramResource { commands, source });
         Ok((atoms::ok(), resource, count))
     })
 }
@@ -116,6 +117,7 @@ fn run_parsed_program<'a>(
             snapshot_inline_leaves,
             snapshot_split_primitive_outputs,
         )
+        .map_err(|error| error.context("run", &parsed_program.source))
     })
 }
 
@@ -172,6 +174,7 @@ fn run_parsed_egraph<'a>(
                 snapshot_inline_leaves,
                 snapshot_split_primitive_outputs,
             )
+            .map_err(|error| error.context("run", &parsed_program.source))
         })?;
         Ok(native_run_response(run))
     })
@@ -187,7 +190,7 @@ fn eval_program<'a>(
     respond(env, || {
         let (sort, kind, value) = resources::with_cloned_program(&program, |egraph| {
             run_input(egraph, &source)?;
-            inspect::eval_expr(egraph, &expr)
+            inspect::eval_expr(egraph, &expr).map_err(|error| error.context("eval", &expr))
         })?;
 
         Ok((atoms::ok(), sort, kind, value))
@@ -197,9 +200,44 @@ fn eval_program<'a>(
 #[rustler::nif(schedule = "DirtyCpu")]
 fn eval_egraph<'a>(env: Env<'a>, egraph: ResourceArc<EGraphResource>, expr: String) -> Term<'a> {
     respond(env, || {
-        let (sort, kind, value) =
-            resources::with_egraph_mut(&egraph, |egraph| inspect::eval_expr(egraph, &expr))?;
+        let (sort, kind, value) = resources::with_egraph_mut(&egraph, |egraph| {
+            inspect::eval_expr(egraph, &expr).map_err(|error| error.context("eval", &expr))
+        })?;
         Ok((atoms::ok(), sort, kind, value))
+    })
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn extract_program<'a>(
+    env: Env<'a>,
+    program: ResourceArc<ProgramResource>,
+    source: String,
+    expr: String,
+    variants: Option<i64>,
+) -> Term<'a> {
+    respond(env, || {
+        let result = resources::with_cloned_program(&program, |graph| {
+            run_input(graph, &source)?;
+            extraction::extract(graph, &expr, variants)
+                .map_err(|error| error.context("extract", &expr))
+        })?;
+        Ok((atoms::ok(), result))
+    })
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn extract_egraph<'a>(
+    env: Env<'a>,
+    graph: ResourceArc<EGraphResource>,
+    expr: String,
+    variants: Option<i64>,
+) -> Term<'a> {
+    respond(env, || {
+        let result = resources::with_egraph_mut(&graph, |graph| {
+            extraction::extract(graph, &expr, variants)
+                .map_err(|error| error.context("extract", &expr))
+        })?;
+        Ok((atoms::ok(), result))
     })
 }
 
@@ -215,6 +253,7 @@ fn lookup_program<'a>(
         let value = resources::with_cloned_program(&program, |egraph| {
             run_input(egraph, &source)?;
             inspect::lookup_function(egraph, &name, arg_exprs)
+                .map_err(|error| error.stage("lookup"))
         })?;
 
         Ok(native_lookup_response(value))
@@ -231,6 +270,7 @@ fn lookup_egraph<'a>(
     respond(env, || {
         let value = resources::with_egraph_mut(&egraph, |egraph| {
             inspect::lookup_function(egraph, &name, arg_exprs)
+                .map_err(|error| error.stage("lookup"))
         })?;
         Ok(native_lookup_response(value))
     })
@@ -301,6 +341,38 @@ fn function_egraph<'a>(env: Env<'a>, graph: ResourceArc<EGraphResource>, name: S
 }
 
 #[rustler::nif(schedule = "DirtyCpu")]
+fn rows_program<'a>(
+    env: Env<'a>,
+    program: ResourceArc<ProgramResource>,
+    source: String,
+    name: String,
+    limit: usize,
+) -> Term<'a> {
+    respond(env, || {
+        let (rows, truncated) = resources::with_cloned_program(&program, |graph| {
+            run_input(graph, &source)?;
+            inspect::rows(graph, &name, limit).map_err(|error| error.stage("rows"))
+        })?;
+        Ok((atoms::ok(), rows, truncated))
+    })
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn rows_egraph<'a>(
+    env: Env<'a>,
+    graph: ResourceArc<EGraphResource>,
+    name: String,
+    limit: usize,
+) -> Term<'a> {
+    respond(env, || {
+        let (rows, truncated) = resources::with_egraph(&graph, |graph| {
+            inspect::rows(graph, &name, limit).map_err(|error| error.stage("rows"))
+        })?;
+        Ok((atoms::ok(), rows, truncated))
+    })
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
 fn clear_function_egraph<'a>(
     env: Env<'a>,
     graph: ResourceArc<EGraphResource>,
@@ -323,7 +395,10 @@ fn query_egraph<'a>(
 ) -> Term<'a> {
     respond(env, || {
         resources::with_egraph_mut(&graph, |graph| {
-            Ok((atoms::ok(), inspect::query(graph, vars, facts)?))
+            Ok((
+                atoms::ok(),
+                inspect::query(graph, vars, facts).map_err(|error| error.stage("query"))?,
+            ))
         })
     })
 }
@@ -339,7 +414,10 @@ fn query_program<'a>(
     respond(env, || {
         resources::with_cloned_program(&program, |graph| {
             run_input(graph, &source)?;
-            Ok((atoms::ok(), inspect::query(graph, vars, facts)?))
+            Ok((
+                atoms::ok(),
+                inspect::query(graph, vars, facts).map_err(|error| error.stage("query"))?,
+            ))
         })
     })
 }
@@ -408,7 +486,10 @@ fn run_input(egraph: &mut EGraph, source: &str) -> Result<(), NativeError> {
     if source.trim().is_empty() {
         Ok(())
     } else {
-        execute_program(egraph, source, Instant::now(), "none", 0, 0, 0, false).map(|_run| ())
+        egraph
+            .parse_and_run_program(None, source)
+            .map(|_| ())
+            .map_err(|error| NativeError::from(error).context("input", source))
     }
 }
 

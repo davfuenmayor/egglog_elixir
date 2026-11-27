@@ -22,10 +22,6 @@ the [upstream tutorial](https://egraphs-good.github.io/egglog-tutorial/).
 | [05 — Extraction and Cost](egglog-tutorial/05-cost-model-and-extraction.livemd) | Extraction, costs and matrix illustrations                         |
 | [06 — LA compiler](egglog-tutorial/06-case-study.livemd)                        | Compiler graph illustrations and upstream Rust extension exercises |
 
-## More notebooks
-
-Additional topic notebooks will be listed here as the collection grows.
-
 ## Reference
 
 The [shared Livebook guide](https://github.com/davfuenmayor/egglog_elixir/blob/main/livebooks/README.md)
